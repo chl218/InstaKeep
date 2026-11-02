@@ -24,6 +24,10 @@ From then on, `python main-program.py` switches to `.venv` by itself. Run `pytho
 
 ## The window
 
+The window has two tabs. **Batch** works on your saved list of users. **Individual** downloads one post from its link. Below the tabs, the download options, **Stop**, **Open folder** and the log are shared by both, and only one download runs at a time.
+
+### Batch
+
 | Part | What it does |
 |------|--------------|
 | User table | Your saved list. Last downloaded shows when and how it went (e.g. `2026-11-02 08:00  ok, 3 new`). Time counts up while that user downloads, then shows how long the run took. Total time, Images and Videos add up every download of that user. |
@@ -33,6 +37,16 @@ From then on, `python main-program.py` switches to `.venv` by itself. Run `pytho
 | Videos / Caption (.txt) / #tags / Metadata | #tags starts on and the others start off. See [Captions and hashtag Tags](#captions-and-hashtag-tags). |
 | **Download all** / **Download selected** | Downloads for those users. **Stop** finishes the current post and then stops, and it also works during a rate-limit pause. |
 | **Open folder** | Opens the selected user's folder, or the output folder. |
+
+### Individual
+
+Paste a post or reel link, such as `https://www.instagram.com/p/DXwaXSSEuX8/` (anything after the code, like `?igsh=...`, is ignored), and press **Download post** or Enter. It uses one Instagram request for the post's details.
+
+- The post is saved in `downloads/<account>/` with the same file names Batch uses, so a later Batch download of that account skips it.
+- Videos, Caption, #tags and Metadata apply as they do in Batch. With Videos off, a video post is skipped and the log says so.
+- Tick **Also add the post's account to the saved list** to add its account to the Batch list once the post has loaded.
+- **Open folder** on this tab opens the folder of the last post's account.
+- Only public accounts work. A deleted post and a private account's post both show "couldn't be loaded".
 
 Changes are saved to `data/instakeep.json` as you make them, so the list and options are still there next time.
 
@@ -164,11 +178,11 @@ flowchart LR
 | [`src/instakeep/bootstrap.py`](src/instakeep/bootstrap.py) | Setup check and venv install (standard library only). |
 | [`src/instakeep/store.py`](src/instakeep/store.py) | Saved users and settings. |
 | [`src/instakeep/runner.py`](src/instakeep/runner.py) | Downloads for each user, records results, run lock, `--run` logging. |
-| [`src/instakeep/gui.py`](src/instakeep/gui.py) | The tkinter window. |
+| [`src/instakeep/gui.py`](src/instakeep/gui.py) | The tkinter window: Batch and Individual tabs. |
 | [`src/igdl/cli.py`](src/igdl/cli.py) | The `igdl` command; maps errors to messages and exit codes. |
-| [`src/igdl/downloader.py`](src/igdl/downloader.py) | Configures instaloader, reports rate-limit pauses, runs the download loop. |
+| [`src/igdl/downloader.py`](src/igdl/downloader.py) | Configures instaloader, reports rate-limit pauses, runs the download loop, downloads a single post. |
 | [`src/igdl/tags.py`](src/igdl/tags.py) | Writes caption hashtags into a JPEG's EXIF Tags. |
-| [`src/igdl/security.py`](src/igdl/security.py) | Username check, stripping control and bidi characters, one-line error messages. |
+| [`src/igdl/security.py`](src/igdl/security.py) | Username and post-link checks, stripping control and bidi characters, one-line error messages. |
 
 `.venv/`, `data/`, `logs/` and `downloads/` are created at runtime and are git-ignored.
 

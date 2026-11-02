@@ -24,6 +24,28 @@ _USERNAME_RE = re.compile(r"[A-Za-z0-9._]{1,30}")
 #     which can make a caption or log line display differently from what it says.
 _UNSAFE_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f‪-‮⁦-⁩]")
 
+# A post link: instagram.com/p/<code>, /reel/<code>, /reels/<code> or /tv/<code>,
+# optionally after the account name (instagram.com/natgeo/p/<code>). Anything after
+# the code (?igsh=..., ?srtk=..., #...) is ignored. Only the code is used afterwards,
+# so nothing else from the pasted text reaches a request or a file name.
+_POST_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.|m\.)?instagram\.com/(?:[A-Za-z0-9._]{1,30}/)?"
+    r"(?:p|reels?|tv)/([A-Za-z0-9_-]{5,64})/?(?:[?#].*)?",
+    re.IGNORECASE,
+)
+
+
+def parse_post_url(text: str) -> str:
+    """'https://www.instagram.com/p/DXwaXSSEuX8/?srtk=...' -> 'DXwaXSSEuX8'.
+
+    Raises ValueError if the text isn't an Instagram post or reel link.
+    """
+    match = _POST_URL_RE.fullmatch(text.strip())
+    if not match:
+        raise ValueError("Not an Instagram post link. It should look like "
+                         "https://www.instagram.com/p/... or https://www.instagram.com/reel/...")
+    return match.group(1)
+
 
 def is_valid_username(name: str) -> bool:
     """True if name could be an Instagram username."""

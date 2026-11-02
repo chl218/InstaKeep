@@ -302,3 +302,70 @@ def test_stats_count_new_images_and_videos_separately(tmp_path, monkeypatch):
     assert stats.media_count == 2 and stats.posts == 2 and stats.new_posts == 1
     assert stats.images == 1 and stats.videos == 1
     assert stats.image_seconds == pytest.approx(stats.video_seconds)  # time split by file count
+
+
+@pytest.mark.parametrize("exc,code,words", [
+    ("BadResponseException", cli.EXIT_NOT_FOUND, "deleted"),
+    ("QueryReturnedNotFoundException", cli.EXIT_NOT_FOUND, "deleted"),  # a 404, not a block
+    ("LoginRequiredException", cli.EXIT_PRIVATE, "private"),
+    ("TooManyRequestsException", cli.EXIT_RATE_LIMIT, "rate-limiting"),
+])
+def test_describe_error_for_a_single_post(exc, code, words):
+    from instaloader import exceptions
+
+    result = cli.describe_error(getattr(exceptions, exc)("boom"), "", post="DXwaXSSEuX8")
+    assert result is not None and result[0] == code and words in result[1]
+    assert "profile ''" not in result[1]
+
+
+def _fake_post(monkeypatch, owner="NatGeo", is_video=False, caption="Sunset #film"):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    post = SimpleNamespace(shortcode="DXwaXSSEuX8", owner_username=owner, is_video=is_video,
+                           date_utc=datetime(2026, 1, 2), caption=caption)
+    monkeypatch.setattr(downloader.instaloader.Post, "from_shortcode", lambda ctx, code: post)
+    return post
+
+
+def test_single_post_saves_into_the_owners_folder(tmp_path, monkeypatch):
+    _fake_post(monkeypatch)
+    loader = downloader.build_loader(tmp_path, quiet=True)
+    monkeypatch.setattr(loader, "format_filename", lambda p, target: f"{target}_{p.shortcode}")
+    saved = []
+
+    def download_post(post, target):
+        saved.append(target)
+        folder = tmp_path / target
+        folder.mkdir(exist_ok=True)
+        (folder / f"{target}_{post.shortcode}_1.jpg").write_bytes(b"x")
+        (folder / f"{target}_{post.shortcode}_2.jpg").write_bytes(b"x")
+        (folder / f"{target}_{post.shortcode}.txt").write_text("caption")  # not media
+
+    monkeypatch.setattr(loader, "download_post", download_post)
+    tagged = []
+    monkeypatch.setattr(downloader, "tag_post_images", lambda f, b, tags: tagged.append(tags) or 2)
+    result = downloader.download_single_post(loader, "DXwaXSSEuX8", log=lambda m: None, tags=True)
+    assert result == downloader.PostResult("natgeo", saved=True, new_files=2)
+    assert saved == ["natgeo"]  # lowercase, like download_user's folders
+    assert tagged == [["#film"]]
+
+
+def test_single_video_post_is_skipped_when_videos_are_off(tmp_path, monkeypatch):
+    _fake_post(monkeypatch, is_video=True)
+    loader = downloader.build_loader(tmp_path, quiet=True)
+    monkeypatch.setattr(loader, "download_post", lambda p, target: pytest.fail("downloaded"))
+    logs = []
+    result = downloader.download_single_post(loader, "DXwaXSSEuX8", log=logs.append)
+    assert result == downloader.PostResult("natgeo", saved=False)
+    assert "Tick Videos" in logs[0]
+
+
+def test_single_post_rejects_an_unusable_owner_name(tmp_path, monkeypatch):
+    from instaloader.exceptions import BadResponseException
+
+    _fake_post(monkeypatch, owner="../evil")
+    loader = downloader.build_loader(tmp_path, quiet=True)
+    with pytest.raises(BadResponseException):
+        downloader.download_single_post(loader, "DXwaXSSEuX8", log=lambda m: None)
+    assert not (tmp_path.parent / "evil").exists()

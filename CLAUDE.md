@@ -27,7 +27,7 @@ There is no linter or formatter configured. Tests never touch the network: Insta
 
 There are two packages under `src/`, and dependencies only go one way: `instakeep` → `igdl`. Never the reverse.
 
-- **`igdl`** is the download library plus the `igdl` console script. `downloader.build_loader()` configures instaloader (file naming, images-only default, rate-limit pause notices and stop-during-pause through `_PauseAwareRateController`). `downloader.download_user()` runs the per-profile loop: it drops videos before counting, and reads `limit + 3` posts to handle up to 3 pinned posts. `cli.describe_error()` maps instaloader exceptions to `(exit_code, message)`; the CLI and the app both use it. `tags.py` writes caption hashtags into JPEG EXIF `XPKeywords` with piexif, without re-encoding the image.
+- **`igdl`** is the download library plus the `igdl` console script. `downloader.build_loader()` configures instaloader (file naming, images-only default, rate-limit pause notices and stop-during-pause through `_PauseAwareRateController`). `downloader.download_user()` runs the per-profile loop: it drops videos before counting, and reads `limit + 3` posts to handle up to 3 pinned posts. `downloader.download_single_post()` saves one post (shortcode from `security.parse_post_url()`) into the owner's folder with the same file names. `cli.describe_error()` maps instaloader exceptions to `(exit_code, message)`; the CLI and the app both use it. `tags.py` writes caption hashtags into JPEG EXIF `XPKeywords` with piexif, without re-encoding the image.
 - **`instakeep`** is the app. `main-program.py` → `bootstrap.ensure_ready()` → a `store.Store` → one of: `gui.App`, `runner.run_headless()` (`--run`), or the list commands.
 
 Constraints that span several files:

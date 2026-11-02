@@ -46,3 +46,27 @@ def test_describe_unexpected_has_summary_and_traceback():
     first, _, rest = text.partition("\n")
     assert first == "unexpected error (OSError): disk [2Jfull"  # control chars stripped
     assert "Traceback (most recent call last)" in rest and "\x1b" not in rest
+
+
+@pytest.mark.parametrize("link", [
+    "https://www.instagram.com/p/DXwaXSSEuX8/?srtk=MXZjcWJ0Z3Z5eTd0ZQ==",
+    "https://www.instagram.com/p/DXwaXSSEuX8/",
+    "  instagram.com/p/DXwaXSSEuX8  ",
+    "https://instagram.com/reel/DXwaXSSEuX8?igsh=abc",
+    "https://www.instagram.com/natgeo/p/DXwaXSSEuX8/",
+    "http://m.instagram.com/tv/DXwaXSSEuX8#top",
+])
+def test_parse_post_url(link):
+    assert security.parse_post_url(link) == "DXwaXSSEuX8"
+
+
+@pytest.mark.parametrize("bad", [
+    "", "DXwaXSSEuX8", "https://www.instagram.com/natgeo/",
+    "https://evil.example/instagram.com/p/DXwaXSSEuX8/",
+    "https://www.instagram.com.evil.example/p/DXwaXSSEuX8/",
+    "https://www.instagram.com/p/../../etc/",
+    "https://www.instagram.com/p/DX wa/",
+])
+def test_parse_post_url_rejects_other_text(bad):
+    with pytest.raises(ValueError):
+        security.parse_post_url(bad)

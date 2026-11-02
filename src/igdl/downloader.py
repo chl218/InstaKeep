@@ -8,6 +8,7 @@ This module does three things:
   - download_user(): list a profile's posts, filter and limit them, save each one,
     write the caption's hashtags into the images' Tags, and optionally measure how
     long images and videos took (DownloadStats).
+  - download_single_post(): the same for one post given by its link's shortcode.
 
 instaloader does the Instagram API calls, paging, retries and file writing.
 There is no login: only public profiles can be downloaded.
@@ -24,9 +25,9 @@ from pathlib import Path
 from typing import Callable
 
 import instaloader
-from instaloader.exceptions import PrivateProfileNotFollowedException
+from instaloader.exceptions import BadResponseException, PrivateProfileNotFollowedException
 
-from .security import strip_control
+from .security import is_valid_username, strip_control
 from .tags import extract_hashtags, tag_post_images
 
 
@@ -315,3 +316,50 @@ def download_user(
             stats.queries += getattr(controller, "queries", 0) - queries_before
             stats.pause_seconds += getattr(controller, "paused_seconds", 0.0) - paused_before
     return count
+
+
+@dataclass
+class PostResult:
+    """What download_single_post() did."""
+    owner: str           # the post's account (lowercase), e.g. "natgeo"
+    saved: bool          # False if skipped: a video post while videos are off
+    new_files: int = 0   # new image/video files written
+
+
+def download_single_post(
+    loader: instaloader.Instaloader,
+    shortcode: str,
+    log: Callable[[str], None] = print,
+    tags: bool = False,
+) -> PostResult:
+    """Download one post (from security.parse_post_url) into output_dir/<owner>/.
+
+    The files get the same names download_user() gives them, so a later run for
+    that account skips this post. Video posts are skipped unless the loader was
+    built with videos=True. A post that is gone, or whose account is private,
+    raises BadResponseException (see cli.describe_error).
+    """
+    # One request: the post's data, including its owner.
+    post = instaloader.Post.from_shortcode(loader.context, shortcode)
+    owner = post.owner_username
+    # The owner name comes from Instagram and becomes a folder name.
+    if not is_valid_username(owner):
+        raise BadResponseException(f"Instagram returned an unusable account name for post {shortcode}.")
+    owner = owner.lower()
+
+    if post.is_video and not loader.download_videos:
+        log(f"@{owner} {shortcode} is a video post. Tick Videos to download it.")
+        return PostResult(owner, saved=False)
+
+    log(f"Downloading {shortcode} ({post.date_utc:%Y-%m-%d}) from @{owner}")
+    folder = Path(loader.dirname_pattern).parent / owner
+    basename = loader.format_filename(post, target=owner)
+    before = _post_files(folder, basename)
+    loader.download_post(post, target=owner)  # files already on disk are skipped
+    new = {n for n in _post_files(folder, basename) - before
+           if Path(n).suffix.lower() in IMAGE_SUFFIXES | VIDEO_SUFFIXES}
+    if tags:
+        hashtags = extract_hashtags(post.caption)
+        if hashtags and tag_post_images(folder, basename, hashtags):
+            log(f"    tags: {'; '.join(hashtags)}")
+    return PostResult(owner, saved=True, new_files=len(new))

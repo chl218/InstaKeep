@@ -17,10 +17,12 @@ import sys
 from pathlib import Path
 
 from instaloader.exceptions import (
+    BadResponseException,
     ConnectionException,
     LoginRequiredException,
     PrivateProfileNotFollowedException,
     ProfileNotExistsException,
+    QueryReturnedNotFoundException,
     TooManyRequestsException,
 )
 
@@ -93,12 +95,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def describe_error(e: BaseException, username: str) -> tuple[int, str] | None:
+def describe_error(e: BaseException, username: str, post: str | None = None) -> tuple[int, str] | None:
     """Map an exception to (exit code, user-facing message), or None if unexpected.
 
-    Shared by the terminal (main below) and InstaKeep (runner.py), so both
-    explain failures the same way.
+    Shared by the terminal (main below) and InstaKeep (runner.py, the window's
+    single-post download), so all explain failures the same way. Pass `post` (its
+    shortcode) for a single-post download: the account isn't known yet then.
     """
+    if post is not None:
+        # Logged out, Instagram answers a deleted post and a private account's post
+        # the same way: no data (BadResponseException) or 404. Checked before the
+        # ConnectionException branch, which 404 is a kind of.
+        if isinstance(e, (BadResponseException, QueryReturnedNotFoundException)):
+            return EXIT_NOT_FOUND, (f"post '{post}' couldn't be loaded. It may have been deleted, "
+                                    "or its account is private.")
+        if isinstance(e, (PrivateProfileNotFollowedException, LoginRequiredException)):
+            return EXIT_PRIVATE, f"post '{post}' is from a private account, so it can't be downloaded."
     # Order matters: TooManyRequestsException is a kind of ConnectionException.
     if isinstance(e, ProfileNotExistsException):
         return EXIT_NOT_FOUND, f"profile '{username}' does not exist."

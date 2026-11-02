@@ -121,3 +121,55 @@ def test_download_selected_without_selection_shows_hint(app, dialogs):
     app.tree.selection_set([])
     app._start_selected()
     assert dialogs.texts("showinfo") == [gui.SELECT_FIRST]
+
+
+def test_tabs_are_batch_and_individual(app):
+    assert [app.tabs.tab(t, "text") for t in app.tabs.tabs()] == ["Batch", "Individual"]
+
+
+def test_bad_post_link_shows_a_warning(app, dialogs):
+    app.post_link.set("https://www.instagram.com/natgeo/")
+    app._start_post()
+    assert dialogs.texts("showwarning")[0].startswith("Not an Instagram post link")
+    assert app.worker is None
+
+
+def _run_post(app, add_owner, download_post):
+    from types import SimpleNamespace
+
+    def build_loader(*_a, **_kw):
+        return SimpleNamespace(context=SimpleNamespace())
+
+    app._run_post("DXwaXSSEuX8", add_owner, app.store.settings,
+                  build_loader=build_loader, download_post=download_post)
+    app._poll_messages()
+
+
+def test_post_download_can_add_its_account(app, store):
+    from igdl import downloader
+    _run_post(app, True, lambda loader, code, log, tags: downloader.PostResult("nasa_hubble", True, 3))
+    assert "nasa_hubble" in store.usernames()
+    assert app.tree.exists("nasa_hubble")
+    log = app.log_box.get("1.0", "end")
+    assert "Added @nasa_hubble to the saved list." in log
+    assert "Done. 3 new file(s) from @nasa_hubble." in log
+    assert str(app.post_button.cget("state")) == "normal"
+
+
+def test_post_download_leaves_the_list_alone_when_unticked(app, store):
+    from igdl import downloader
+    _run_post(app, False, lambda loader, code, log, tags: downloader.PostResult("nasa_hubble", True, 1))
+    assert store.usernames() == ["natgeo", "nasa"]
+    assert app.post_owner == "nasa_hubble"  # Open folder goes there
+
+
+def test_missing_post_shows_a_short_error(app, store, dialogs):
+    from instaloader.exceptions import BadResponseException
+
+    def gone(loader, code, log, tags):
+        raise BadResponseException("Fetching Post metadata failed.")
+
+    _run_post(app, True, gone)
+    assert dialogs.texts("showerror") == [
+        "post 'DXwaXSSEuX8' couldn't be loaded. It may have been deleted, or its account is private."]
+    assert store.usernames() == ["natgeo", "nasa"]
