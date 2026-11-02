@@ -90,7 +90,7 @@ class App:
 
         # A bug in a button handler: also show its traceback in the log box.
         root.report_callback_exception = self._on_callback_error
-        root.title(f"{TITLE} - Instagram downloads")
+        root.title(f"{TITLE} - Save it or lose it")
         root.minsize(760, 640)  # widened by _fit_columns() to fit the table
 
         # Form values. tkinter variables are bound to the widgets built below.
