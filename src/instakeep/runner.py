@@ -2,14 +2,15 @@
 
 Used by both the window (on a background thread) and `instakeep.py --run`
 (no window). Downloading itself is igdl's job: this module only loops over the
-users, keeps going when one user fails, records results, and makes sure two
-downloads never run at once (RunLock).
+users, keeps going when one user fails, records results, follows renamed
+accounts, and makes sure two downloads never run at once (RunLock).
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,8 +21,9 @@ from igdl import cli, downloader
 from igdl.security import describe_unexpected, strip_control
 
 from . import paths
+from .bootstrap import EXIT_SETUP
 from .estimate import format_duration
-from .store import Store
+from .store import NewerStoreError, Store, folder_name
 
 # Exit codes of `instakeep.py --run`, documented in the README.
 EXIT_OK = 0
@@ -30,7 +32,8 @@ EXIT_RATE_LIMIT = cli.EXIT_RATE_LIMIT  # 4, the same code igdl uses
 EXIT_BUSY = 5                          # another run is already in progress
 KEEP_LOGS = 30                         # newest log files kept in logs/
 MEDIA_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".mp4"}  # counted as "new files"
-STALE_LOCK_SECONDS = 24 * 3600         # a lock this old is ignored, whoever holds it
+HEARTBEAT_SECONDS = 60                 # how often the holder touches the lock file
+STALE_LOCK_SECONDS = 3600              # a lock not touched for this long is ignored
 
 # igdl exit code -> the short status shown in the "Last downloaded" column.
 _SHORT_ERRORS = {
@@ -81,11 +84,20 @@ def pid_alive(pid: int) -> bool:
 
 
 class RunLock:
-    """A lock file so the window and a --run never download at the same time."""
+    """A lock file so the window and a --run never download at the same time.
 
-    def __init__(self, path: Path) -> None:
+    While held, a background thread touches the file every `heartbeat` seconds.
+    A lock whose holder has died, or that hasn't been touched for
+    STALE_LOCK_SECONDS, is taken over. So a run of any length keeps its lock,
+    and a crashed one (even if its PID was reused) frees it within the hour.
+    """
+
+    def __init__(self, path: Path, heartbeat: float = HEARTBEAT_SECONDS) -> None:
         self.path = Path(path)
+        self.heartbeat = heartbeat
         self.held = False
+        self._stop_beat = threading.Event()
+        self._beat: threading.Thread | None = None
 
     def acquire(self) -> bool:
         """Take the lock. False if another live process holds it.
@@ -109,11 +121,25 @@ class RunLock:
             with os.fdopen(fd, "w") as f:
                 f.write(str(os.getpid()))
             self.held = True
+            self._start_heartbeat()
             return True
         return False
 
+    def _start_heartbeat(self) -> None:
+        self._stop_beat.clear()
+        self._beat = threading.Thread(target=self._keep_fresh, daemon=True)
+        self._beat.start()
+
+    def _keep_fresh(self) -> None:
+        """Runs on the heartbeat thread: update the lock file's time until released."""
+        while not self._stop_beat.wait(self.heartbeat):
+            try:
+                os.utime(self.path)
+            except OSError:
+                return  # the file is gone; nothing left to keep fresh
+
     def _is_stale(self) -> bool:
-        """True if the holder is gone, the lock is very old, or the file is unreadable."""
+        """True if the holder is gone, the lock wasn't touched lately, or the file is unreadable."""
         try:
             pid = int(self.path.read_text().strip() or 0)
             age = time.time() - self.path.stat().st_mtime
@@ -124,6 +150,10 @@ class RunLock:
     def release(self) -> None:
         """Remove the lock file, if we hold it. Safe to call more than once."""
         if self.held:
+            self._stop_beat.set()
+            if self._beat is not None:
+                self._beat.join(timeout=5)
+                self._beat = None
             try:
                 self.path.unlink()
             except FileNotFoundError:
@@ -147,6 +177,21 @@ def _media_files(folder: Path) -> set[str]:
         return set()
 
 
+def run_order(users: list[dict], only: list[str] | None) -> list[str]:
+    """The usernames to download, in the order to download them.
+
+    A full run (only=None) starts with whoever went longest without a successful
+    download (never first), so when a rate limit ends runs early, the users at
+    the end of the list still get their turn. Ties keep the list order.
+    A run of selected users keeps the list order.
+    """
+    if only is not None:
+        wanted = set(only)
+        return [u["username"] for u in users if u["username"] in wanted]
+    # ISO timestamps sort by time; "" (never) sorts first. sorted() is stable.
+    return [u["username"] for u in sorted(users, key=lambda u: u.get("last_ok") or "")]
+
+
 def run_all(
     store: Store,
     log: Callable[[str], None] = print,
@@ -158,6 +203,7 @@ def run_all(
     download_user=downloader.download_user,
     describe_error=cli.describe_error,
     on_user_start: Callable[[str], None] | None = None,
+    lookup_username=downloader.username_for_id,
 ) -> list[UserResult]:
     """Download the newest `limit` posts (or all posts) of each saved user, or just `only`.
 
@@ -166,13 +212,19 @@ def run_all(
     Each user's download is timed, and its file counts, times, requests and
     pauses are added to the user's records (used for the time estimates).
     on_user_start(name) is called as each user begins (the window's timer).
-    build_loader / download_user / describe_error are igdl's; tests pass fakes.
+    An "all posts" run of a user who was fully downloaded before stops at posts
+    already on disk. A user who isn't found is looked up by their saved ID, and
+    a renamed account is switched to its new name (see _follow_rename).
+
+    Raises NewerStoreError before downloading anything if a newer InstaKeep
+    wrote the data file (it couldn't record the results).
+    build_loader / download_user / describe_error / lookup_username are igdl's;
+    tests pass fakes.
     """
+    store.check_writable()  # also picks up the other process's latest changes
     s = store.settings  # one snapshot, so a settings change mid-run can't mix values
-    names = store.usernames()
-    if only is not None:
-        wanted = set(only)
-        names = [n for n in names if n in wanted]
+    users = {u["username"]: u for u in store.users}
+    names = run_order(list(users.values()), only)
     if not names:
         log("No users in the list.")
         return []
@@ -199,13 +251,15 @@ def run_all(
         log(f"=== [{i}/{len(names)}] @{name} ({what}) ===")
         if on_user_start:
             on_user_start(name)
-        folder = output / name
+        user = users[name]
+        folder = output / folder_name(user)
         before = _media_files(folder)
         stats = downloader.DownloadStats()
         started = time.monotonic()
         try:
             download_user(loader, name, limit, log=log, should_stop=should_stop,
-                          tags=s["tags"], stats=stats)
+                          tags=s["tags"], stats=stats, folder_name=folder_name(user),
+                          stop_at_known=limit is None and user["full_scan_done"])
         except Exception as e:  # noqa: BLE001 - record every failure and keep going
             known = describe_error(e, name)
             code, message = known if known else (None, describe_unexpected(e))
@@ -220,31 +274,64 @@ def run_all(
         if result.ok:
             log(f"@{name}: {result.new_files} new file(s) "
                 f"({stats.images} image(s), {stats.videos} video(s)) in {format_duration(result.seconds)}")
-        store.record_result(name, result.status, run_stats=_run_stats(stats, result, limit))
+        store.record_result(name, result.status, run_stats=_run_stats(stats, result),
+                            ok=result.ok, userid=stats.userid,
+                            full_scan=result.ok and stats.complete)
+        blocked = False
+        if result.code == cli.EXIT_NOT_FOUND and user["userid"]:
+            blocked = _follow_rename(store, loader, user, log, lookup_username, describe_error)
         results.append(result)
         if on_user_done:
             on_user_done(result)
-        if result.code == EXIT_RATE_LIMIT:
+        if result.code == EXIT_RATE_LIMIT or blocked:
             # The remaining users would hit the same block, so stop here.
             log("Instagram is blocking requests; skipping the remaining users until the next run.")
             break
     return results
 
 
-def _run_stats(stats: downloader.DownloadStats, result: UserResult,
-               limit: int | None) -> dict:
+def _follow_rename(store: Store, loader, user: dict, log: Callable[[str], None],
+                   lookup_username, describe_error) -> bool:
+    """@name wasn't found: look its saved ID up, and switch the list to the new name.
+
+    The folder stays the old one, so the history stays in one place. The new name
+    is downloaded from the next run. Returns True if the lookup was rate-limited
+    (the run should end, like any rate limit).
+    """
+    name = user["username"]
+    try:
+        new = lookup_username(loader, user["userid"])
+    except Exception as e:  # noqa: BLE001 - the user already failed; a failed check must not end the others
+        known = describe_error(e, name)
+        log(f"Couldn't check whether @{name} was renamed: {known[1] if known else describe_unexpected(e)}")
+        return bool(known) and known[0] == EXIT_RATE_LIMIT
+    if new is None or new == name:
+        log(f"@{name}: no account with its ID either. It may have been deleted, "
+            "or Instagram wouldn't say without a login.")
+        return False
+    if store.rename_user(name, new):
+        log(f"@{name} is now called @{new}. The list now uses @{new}; its posts keep going "
+            f"into the '{folder_name(user)}' folder. It's downloaded from the next run.")
+    else:
+        log(f"@{name} is now called @{new}, which is already in the list. "
+            f"Remove @{name} if it's no longer needed.")
+    return False
+
+
+def _run_stats(stats: downloader.DownloadStats, result: UserResult) -> dict:
     """One run's numbers in the store's STAT_FIELDS form.
 
     Time and files from a failed or stopped run still count towards the totals,
     but only finished runs count as runs (estimates average per run).
 
-    Without a login Instagram doesn't give the profile's post count. A finished
-    run over all posts (limit None) looked at every post, so that number is used
-    instead (with videos off it counts image posts only, which is what such a
-    run downloads).
+    Without a login Instagram doesn't always give the profile's post count. A
+    finished run that looked at every post (stats.complete) knows it, so that
+    number is used instead (with videos off it counts image posts only, which
+    is what such a run downloads). A run that stopped early at posts already on
+    disk doesn't: it saw only the newest few.
     """
     media_count = stats.media_count or 0
-    if not media_count and limit is None and result.ok:
+    if not media_count and stats.complete and result.ok:
         media_count = stats.posts
     return {
         "runs": int(result.ok),
@@ -276,8 +363,12 @@ def exit_code(results: list[UserResult]) -> int:
 
 # ------------------------------------------------------------- headless --run
 
-def open_log(logs_dir: Path = paths.LOGS_DIR):
-    """Today's log file (appended to), after deleting all but the newest KEEP_LOGS."""
+def open_log(logs_dir: Path | None = None):
+    """Today's log file (appended to), after deleting all but the newest KEEP_LOGS.
+
+    logs_dir defaults to paths.LOGS_DIR, looked up when called (tests redirect it).
+    """
+    logs_dir = logs_dir or paths.LOGS_DIR
     logs_dir.mkdir(parents=True, exist_ok=True)
     old = sorted(logs_dir.glob("run-*.log"))
     for stale in old[:-KEEP_LOGS]:
@@ -314,6 +405,9 @@ def run_headless(store: Store) -> int:
             log(f"Run started for {len(store.usernames())} user(s).")
             try:
                 results = run_all(store, log=log, on_pause=lambda secs: log(downloader.format_pause(secs)))
+            except NewerStoreError as e:
+                log(f"error: {e}")
+                return EXIT_SETUP
             except Exception as e:  # noqa: BLE001 - always leave the error and its traceback in the log
                 log(f"error: run failed: {describe_unexpected(e)}")
                 return EXIT_SOME_FAILED

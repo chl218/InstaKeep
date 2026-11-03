@@ -7,6 +7,12 @@ has nothing to go on, so they are left out of the estimate (Estimate.no_data).
 The DEFAULT_* values fill in what a user's records don't say yet, such as the
 speed of videos for a user who has only had images downloaded.
 
+"All posts" runs come in two kinds. A user's first one (or a full re-scan)
+looks at every post, so it's estimated per post: time per post from the
+records, times the profile's post count. Once a user was fully downloaded
+(full_scan_done), later runs stop at posts already on disk, so only the posts
+new since the last download are counted.
+
 Rate limit: instaloader allows about QUERY_LIMIT requests per QUERY_WINDOW
 seconds and pauses once it reaches that. One run shares one loader across all
 its users, so the requests of every user count together.
@@ -24,6 +30,7 @@ QUERY_LIMIT = 200
 QUERY_WINDOW = 660            # seconds
 POSTS_PER_PAGE = 12           # posts Instagram returns per request when listing a profile
 MAX_PINNED = 3                # with a limit, igdl reads this many extra posts
+KNOWN_STREAK = 3              # igdl's early stop: posts on disk in a row that end a run
 
 # Used where a user's records don't say yet.
 DEFAULT_IMAGE_SECONDS = 1.5   # per image file
@@ -90,7 +97,8 @@ def _check_seconds(stats: dict) -> float:
     return max(0.0, _ratio(other, stats["posts"], DEFAULT_CHECK_SECONDS))
 
 
-def _expected_new_posts(stats: dict, limit: int | None, worst: bool) -> tuple[float, float, bool]:
+def _expected_new_posts(stats: dict, limit: int | None, worst: bool,
+                        full_scan_done: bool = False) -> tuple[float, float, bool]:
     """(new posts, posts looked at, known) for one user."""
     files_per_post = _ratio(stats["images"] + stats["videos"], stats["new_posts"],
                             DEFAULT_FILES_PER_POST)
@@ -101,7 +109,10 @@ def _expected_new_posts(stats: dict, limit: int | None, worst: bool) -> tuple[fl
         if worst or not stats["runs"]:
             return float(limit), checked, True
         return min(float(limit), since_last), checked, True
-    # All posts: everything not on disk yet, plus what's new since the last download.
+    if full_scan_done:
+        # Stops after the new posts, the pinned ones and KNOWN_STREAK posts on disk.
+        return since_last, since_last + MAX_PINNED + KNOWN_STREAK, True
+    # A full pass: everything not on disk yet, plus what's new since the last download.
     profile_posts = _profile_posts(stats)
     if not profile_posts:
         return 0.0, 0.0, False
@@ -120,10 +131,15 @@ def _profile_posts(stats: dict) -> float:
     return max(float(stats["new_posts"]), stats["posts"] / stats["runs"])
 
 
-def estimate_user(username: str, stats: dict, settings: dict, worst: bool = False) -> UserEstimate:
-    """How long one user should take with these settings (rate-limit pauses excluded)."""
+def estimate_user(username: str, stats: dict, settings: dict, worst: bool = False,
+                  full_scan_done: bool = False) -> UserEstimate:
+    """How long one user should take with these settings (rate-limit pauses excluded).
+
+    full_scan_done: the user was fully downloaded before, so an "all posts" run
+    stops at posts already on disk.
+    """
     limit = None if settings["all_posts"] else settings["limit"]
-    new, checked, known = _expected_new_posts(stats, limit, worst)
+    new, checked, known = _expected_new_posts(stats, limit, worst, full_scan_done)
     seconds = (USER_SECONDS + checked * _check_seconds(stats)
                + new * _seconds_per_post(stats, settings["videos"]))
     queries_per_post = _ratio(stats["queries"], stats["posts"], DEFAULT_QUERIES_PER_POST)
@@ -157,8 +173,10 @@ def estimate(users: list[dict], settings: dict) -> Estimate:
     worst_download = 0.0
     worst_queries = 0.0
     for user in users:
-        typical = estimate_user(user["username"], user["stats"], settings)
-        worst = estimate_user(user["username"], user["stats"], settings, worst=True)
+        done = bool(user.get("full_scan_done"))
+        typical = estimate_user(user["username"], user["stats"], settings, full_scan_done=done)
+        worst = estimate_user(user["username"], user["stats"], settings, worst=True,
+                              full_scan_done=done)
         result.users.append(typical)
         result.download_seconds += typical.seconds
         worst_download += worst.seconds

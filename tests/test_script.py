@@ -47,3 +47,39 @@ def test_ctrl_c_is_a_short_message(program, monkeypatch, capsys):
     monkeypatch.setattr(program, "main", interrupted)
     assert program.run(["--run"]) == 130
     assert "Traceback" not in capsys.readouterr().err
+
+
+@pytest.fixture
+def ready(program, monkeypatch):
+    """Skip the setup check: the test's Python already has everything."""
+    monkeypatch.setattr(program.bootstrap, "ensure_ready", lambda *a, **k: None)
+    return program
+
+
+def test_rescan_marks_users(ready, capsys):
+    from instakeep import paths
+    from instakeep.store import Store
+
+    store = Store(paths.STORE_FILE, paths.DEFAULT_OUTPUT)
+    store.add_user("natgeo")
+    store.record_result("natgeo", "ok", ok=True, full_scan=True)
+    assert ready.main(["--rescan", "natgeo"]) == 0
+    store.reload()
+    assert store.users[0]["full_scan_done"] is False
+    assert ready.main(["--rescan", "natgeo", "nobody"]) == 2  # one name isn't listed
+
+
+def test_list_commands_refuse_a_newer_data_file(ready, capsys):
+    import json
+
+    from instakeep import paths
+
+    paths.STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    paths.STORE_FILE.write_text(json.dumps({"version": 99, "users": [{"username": "natgeo"}]}),
+                                encoding="utf-8")
+    before = paths.STORE_FILE.read_text(encoding="utf-8")
+    assert ready.main(["--add", "nasa"]) == 3
+    assert "newer version of InstaKeep" in capsys.readouterr().err
+    assert paths.STORE_FILE.read_text(encoding="utf-8") == before
+    assert ready.main(["--list"]) == 0  # reading is fine
+    assert "natgeo" in capsys.readouterr().out

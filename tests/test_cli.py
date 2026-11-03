@@ -369,3 +369,138 @@ def test_single_post_rejects_an_unusable_owner_name(tmp_path, monkeypatch):
     with pytest.raises(BadResponseException):
         downloader.download_single_post(loader, "DXwaXSSEuX8", log=lambda m: None)
     assert not (tmp_path.parent / "evil").exists()
+
+
+# ------------------------------------------- file names, folders, early stop
+
+def test_file_names_are_a_fixed_contract(tmp_path):
+    # Whether a post is already downloaded is worked out from these names alone:
+    # changing them would make every saved post download again.
+    loader = downloader.build_loader(tmp_path)
+    assert downloader.FILENAME_PATTERN == "{target}_{date_utc:%Y-%m-%d_%H-%M-%S}_{shortcode}"
+    assert loader.filename_pattern == downloader.FILENAME_PATTERN
+    assert loader.dirname_pattern == str(tmp_path / "{target}")
+
+
+def _stats_feed(monkeypatch, tmp_path, codes, username="u", userid=None):
+    """A profile whose posts are `codes` (newest first); returns (loader, saved, folder)."""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    feed = [SimpleNamespace(shortcode=c, date_utc=datetime(2026, 1, 28 - i), is_video=False, caption="")
+            for i, c in enumerate(codes)]
+    profile = SimpleNamespace(username=username, userid=userid, is_private=False, mediacount=None,
+                              get_posts=lambda: iter(feed))
+    monkeypatch.setattr(downloader.instaloader.Profile, "from_username", lambda ctx, name: profile)
+    loader = downloader.build_loader(tmp_path, quiet=True)
+    monkeypatch.setattr(loader, "format_filename", lambda p, target: f"{target}_{p.shortcode}")
+    saved = []
+
+    def download_post(post, target):
+        saved.append((target, post.shortcode))
+        folder = tmp_path / target
+        folder.mkdir(exist_ok=True)
+        (folder / f"{target}_{post.shortcode}.jpg").write_bytes(b"x")
+    monkeypatch.setattr(loader, "download_post", download_post)
+    return loader, saved, tmp_path / username.lower()
+
+
+def test_folder_is_the_lowercase_username(tmp_path, monkeypatch):
+    loader, saved, _ = _stats_feed(monkeypatch, tmp_path, ["a"], username="NatGeo", userid=99)
+    stats = downloader.DownloadStats()
+    downloader.download_user(loader, "natgeo", log=lambda m: None, stats=stats)
+    assert saved == [("natgeo", "a")] and (tmp_path / "natgeo" / "natgeo_a.jpg").exists()
+    assert stats.userid == 99 and stats.complete
+
+
+def test_folder_name_overrides_the_username(tmp_path, monkeypatch):
+    loader, saved, _ = _stats_feed(monkeypatch, tmp_path, ["a"], username="new_name")
+    downloader.download_user(loader, "new_name", log=lambda m: None, folder_name="old_name")
+    assert saved == [("old_name", "a")]
+
+
+def test_unusable_folder_name_is_refused(tmp_path, monkeypatch):
+    loader, saved, _ = _stats_feed(monkeypatch, tmp_path, ["a"])
+    with pytest.raises(ValueError):
+        downloader.download_user(loader, "u", log=lambda m: None, folder_name="../evil")
+    assert saved == []
+
+
+def _on_disk(folder, *codes):
+    folder.mkdir(exist_ok=True)
+    for c in codes:
+        (folder / f"u_{c}.jpg").write_bytes(b"x")
+
+
+def test_stop_at_known_ends_after_three_posts_on_disk(tmp_path, monkeypatch):
+    codes = ["pin", "n1", "n2", "o1", "o2", "o3", "o4", "o5"]
+    loader, saved, folder = _stats_feed(monkeypatch, tmp_path, codes)
+    _on_disk(folder, "pin", "o1", "o2", "o3", "o4", "o5")
+    stats = downloader.DownloadStats()
+    downloader.download_user(loader, "u", log=lambda m: None, stats=stats, stop_at_known=True)
+    # The first MAX_PINNED posts never count; then three known posts in a row end it.
+    assert [c for _, c in saved] == ["pin", "n1", "n2", "o1", "o2", "o3"]
+    assert not stats.complete
+
+
+def test_stop_at_known_needs_them_in_a_row(tmp_path, monkeypatch):
+    codes = ["p1", "p2", "p3", "o1", "o2", "gap", "o3", "o4", "o5", "o6"]
+    loader, saved, folder = _stats_feed(monkeypatch, tmp_path, codes)
+    _on_disk(folder, "p1", "p2", "p3", "o1", "o2", "o3", "o4", "o5", "o6")
+    downloader.download_user(loader, "u", log=lambda m: None, stop_at_known=True)
+    assert [c for _, c in saved] == ["p1", "p2", "p3", "o1", "o2", "gap", "o3", "o4", "o5"]
+
+
+def test_stop_at_known_is_ignored_with_a_limit(tmp_path, monkeypatch):
+    codes = ["a", "b", "c", "d", "e", "f"]
+    loader, saved, folder = _stats_feed(monkeypatch, tmp_path, codes)
+    _on_disk(folder, *codes)
+    stats = downloader.DownloadStats()
+    downloader.download_user(loader, "u", limit=5, log=lambda m: None, stats=stats, stop_at_known=True)
+    assert len(saved) == 5 and not stats.complete  # a limited run is never a full pass
+
+
+def test_without_stop_at_known_every_post_is_looked_at(tmp_path, monkeypatch):
+    codes = ["a", "b", "c", "d", "e", "f"]
+    loader, saved, folder = _stats_feed(monkeypatch, tmp_path, codes)
+    _on_disk(folder, *codes)
+    stats = downloader.DownloadStats()
+    downloader.download_user(loader, "u", log=lambda m: None, stats=stats)
+    assert len(saved) == 6 and stats.complete and stats.posts == 6
+
+
+def test_a_stopped_run_is_not_a_full_pass(tmp_path, monkeypatch):
+    loader, _, _ = _stats_feed(monkeypatch, tmp_path, ["a", "b"])
+    stats = downloader.DownloadStats()
+    downloader.download_user(loader, "u", log=lambda m: None, stats=stats, should_stop=lambda: True)
+    assert not stats.complete
+
+
+def test_username_for_id(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from instaloader.exceptions import ProfileNotExistsException
+
+    loader = downloader.build_loader(tmp_path, quiet=True)
+    monkeypatch.setattr(downloader.instaloader.Profile, "from_id",
+                        lambda ctx, uid: SimpleNamespace(username="New_Name"))
+    assert downloader.username_for_id(loader, 1) == "new_name"
+    monkeypatch.setattr(downloader.instaloader.Profile, "from_id",
+                        lambda ctx, uid: SimpleNamespace(username="../evil"))
+    assert downloader.username_for_id(loader, 1) is None
+
+    def gone(ctx, uid):
+        raise ProfileNotExistsException("no")
+    monkeypatch.setattr(downloader.instaloader.Profile, "from_id", gone)
+    assert downloader.username_for_id(loader, 1) is None
+
+
+def test_single_post_uses_the_saved_folder(tmp_path, monkeypatch):
+    _fake_post(monkeypatch, owner="new_name")
+    loader = downloader.build_loader(tmp_path, quiet=True)
+    monkeypatch.setattr(loader, "format_filename", lambda p, target: f"{target}_{p.shortcode}")
+    targets = []
+    monkeypatch.setattr(loader, "download_post", lambda p, target: targets.append(target))
+    result = downloader.download_single_post(loader, "DXwaXSSEuX8", log=lambda m: None,
+                                             folder_for=lambda owner: "old_name")
+    assert targets == ["old_name"] and result.owner == "new_name"

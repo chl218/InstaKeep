@@ -9,6 +9,7 @@ This module does three things:
     write the caption's hashtags into the images' Tags, and optionally measure how
     long images and videos took (DownloadStats).
   - download_single_post(): the same for one post given by its link's shortcode.
+  - username_for_id(): an account's current name from its ID (to follow renames).
 
 instaloader does the Instagram API calls, paging, retries and file writing.
 There is no login: only public profiles can be downloaded.
@@ -25,7 +26,11 @@ from pathlib import Path
 from typing import Callable
 
 import instaloader
-from instaloader.exceptions import BadResponseException, PrivateProfileNotFollowedException
+from instaloader.exceptions import (
+    BadResponseException,
+    PrivateProfileNotFollowedException,
+    ProfileNotExistsException,
+)
 
 from .security import is_valid_username, strip_control
 from .tags import extract_hashtags, tag_post_images
@@ -92,6 +97,14 @@ class _PauseAwareRateController(instaloader.RateController):
 # Setup
 # --------------------------------------------------------------------------------------
 
+# Where posts go and what their files are called. These are a fixed contract:
+# whether a post is already downloaded is worked out only from these names, so
+# changing them makes every post download again. tests/test_cli.py pins them.
+# {target} is the folder name: the lowercase username (or, after a rename, the old one).
+# e.g. natgeo_2026-11-01_23-53-04_DfN9Oosk9s2. Carousel items get _1, _2, ...
+DIRNAME_PATTERN = "{target}"
+FILENAME_PATTERN = "{target}_{date_utc:%Y-%m-%d_%H-%M-%S}_{shortcode}"
+
 def build_loader(
     output_dir: Path,
     videos: bool = False,
@@ -117,10 +130,9 @@ def build_loader(
     loader = instaloader.Instaloader(
         # Always our controller, so requests and pauses are counted for DownloadStats.
         rate_controller=lambda ctx: _PauseAwareRateController(ctx, on_pause, should_stop),
-        # instaloader fills {target} with the username passed to download_post().
-        dirname_pattern=str(Path(output_dir) / "{target}"),
-        # e.g. natgeo_2026-11-01_23-53-04_DfN9Oosk9s2. Carousel items get _1, _2, ...
-        filename_pattern="{target}_{date_utc:%Y-%m-%d_%H-%M-%S}_{shortcode}",
+        # instaloader fills {target} with the folder name passed to download_post().
+        dirname_pattern=str(Path(output_dir) / DIRNAME_PATTERN),
+        filename_pattern=FILENAME_PATTERN,
         # Turning off both video files and video thumbnails makes instaloader skip
         # video slides in carousels entirely, instead of saving their cover image.
         download_videos=videos,
@@ -163,6 +175,10 @@ def _install_safe_logging(context: instaloader.InstaloaderContext) -> None:
 # Instagram lets a profile pin up to 3 posts, which it always lists first.
 MAX_PINNED = 3
 
+# With stop_at_known, how many posts in a row already on disk end an "all posts"
+# run. More than one, so a gap left by an interrupted run isn't taken as the end.
+KNOWN_STREAK = 3
+
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 VIDEO_SUFFIXES = {".mp4"}
 
@@ -184,6 +200,8 @@ class DownloadStats:
     video_seconds: float = 0.0
     queries: int = 0                # Instagram API requests (what the rate limit counts)
     pause_seconds: float = 0.0      # rate-limit pauses during this run
+    userid: int | None = None       # the account's ID, which stays the same after a rename
+    complete: bool = False          # True: every post was looked at (no limit, no early stop)
 
 
 def _post_files(folder: Path, basename: str) -> set[str]:
@@ -192,6 +210,11 @@ def _post_files(folder: Path, basename: str) -> set[str]:
         return set()
     # escape(): the name comes from Instagram data, so treat it literally, not as a pattern.
     return {p.name for p in folder.glob(glob.escape(basename) + "*")}
+
+
+def _has_media(names: set[str]) -> bool:
+    """True if any of these file names is an image or a video."""
+    return any(Path(n).suffix.lower() in IMAGE_SUFFIXES | VIDEO_SUFFIXES for n in names)
 
 
 def _count_new_files(stats: DownloadStats, new_files: set[str], seconds: float) -> None:
@@ -216,8 +239,18 @@ def download_user(
     should_stop: Callable[[], bool] = lambda: False,
     tags: bool = False,
     stats: DownloadStats | None = None,
+    folder_name: str | None = None,
+    stop_at_known: bool = False,
 ) -> int:
     """Download a user's posts, newest first. Returns how many were saved.
+
+    The files go in <output_dir>/<folder_name>/, named after folder_name (see
+    FILENAME_PATTERN). folder_name defaults to the lowercase username; InstaKeep
+    passes the old name after an account was renamed. It must be a valid username.
+
+    stop_at_known=True (only used without a limit): stop after KNOWN_STREAK posts
+    in a row that are already on disk, not counting the first MAX_PINNED posts
+    (pinned posts can be old). For profiles that were fully downloaded before.
 
     tags=True writes each caption's #hashtags into the post's images' Tags
     (independent of the caption .txt option in build_loader).
@@ -245,6 +278,7 @@ def download_user(
         profile = instaloader.Profile.from_username(loader.context, username)
         if stats is not None:
             stats.media_count = profile.mediacount
+            stats.userid = getattr(profile, "userid", None)
 
         # Fail early with a clear message rather than an empty download.
         if profile.is_private:
@@ -254,8 +288,15 @@ def download_user(
 
         # Settings chosen in build_loader.
         include_videos = loader.download_videos
+        # The folder name becomes part of a path: same check as a username.
+        target = (folder_name or profile.username).lower()
+        if not is_valid_username(target):
+            raise ValueError(f"unusable folder name: {target!r}")
         # build_loader set dirname_pattern to <output_dir>/{target}.
-        folder = Path(loader.dirname_pattern).parent / profile.username
+        folder = Path(loader.dirname_pattern).parent / target
+        stop_early = stop_at_known and limit is None
+        known_in_a_row = 0
+        seen = 0  # posts from the feed so far, for skipping the pinned ones
 
         # Work out the total for the "[i/total]" progress lines.
         known = profile.mediacount
@@ -280,22 +321,24 @@ def download_user(
             candidates = list(islice(posts, limit + MAX_PINNED))
             posts = sorted(candidates, key=lambda p: p.date_utc, reverse=True)[:limit]
 
+        finished = True  # False if the loop ends before the last post
         for post in posts:
             if should_stop():
                 raise DownloadStopped()
             count += 1
+            seen += 1
             log(f"[{count}/{total}] {post.date_utc:%Y-%m-%d} {post.shortcode}")
             basename = None
-            if stats is not None or tags:
-                basename = loader.format_filename(post, target=profile.username)
+            if stats is not None or tags or stop_early:
+                basename = loader.format_filename(post, target=target)
+            before = _post_files(folder, basename) if basename else set()
             if stats is not None:
                 stats.posts += 1
-                before = _post_files(folder, basename)
                 started = time.monotonic()
                 paused_at_start = getattr(controller, "paused_seconds", 0.0)
             # Saves the media (+ .txt/.json). Files that already exist are skipped,
             # which is what makes re-running after an interruption safe.
-            loader.download_post(post, target=profile.username)
+            loader.download_post(post, target=target)
             if stats is not None:
                 # Rate-limit pauses are measured separately, so leave them out here.
                 paused = getattr(controller, "paused_seconds", 0.0) - paused_at_start
@@ -308,6 +351,16 @@ def download_user(
                 hashtags = extract_hashtags(post.caption)
                 if hashtags and tag_post_images(folder, basename, hashtags):
                     log(f"    tags: {'; '.join(hashtags)}")
+
+            if stop_early and seen > MAX_PINNED:
+                known_in_a_row = known_in_a_row + 1 if _has_media(before) else 0
+                if known_in_a_row >= KNOWN_STREAK:
+                    log("Reached posts downloaded earlier; stopping here. "
+                        "(A full re-scan looks at every post again.)")
+                    finished = False
+                    break
+        if stats is not None:
+            stats.complete = finished and limit is None
     except DownloadStopped:
         # From the check above, or from a rate-limit pause (see build_loader).
         log("Stopped.")
@@ -331,6 +384,7 @@ def download_single_post(
     shortcode: str,
     log: Callable[[str], None] = print,
     tags: bool = False,
+    folder_for: Callable[[str], str] | None = None,
 ) -> PostResult:
     """Download one post (from security.parse_post_url) into output_dir/<owner>/.
 
@@ -338,6 +392,9 @@ def download_single_post(
     that account skips this post. Video posts are skipped unless the loader was
     built with videos=True. A post that is gone, or whose account is private,
     raises BadResponseException (see cli.describe_error).
+
+    folder_for(owner) gives the folder name for an account (InstaKeep keeps a
+    renamed account's old folder); without it, the folder is the owner's name.
     """
     # One request: the post's data, including its owner.
     post = instaloader.Post.from_shortcode(loader.context, shortcode)
@@ -352,10 +409,13 @@ def download_single_post(
         return PostResult(owner, saved=False)
 
     log(f"Downloading {shortcode} ({post.date_utc:%Y-%m-%d}) from @{owner}")
-    folder = Path(loader.dirname_pattern).parent / owner
-    basename = loader.format_filename(post, target=owner)
+    target = folder_for(owner).lower() if folder_for else owner
+    if not is_valid_username(target):
+        raise ValueError(f"unusable folder name: {target!r}")
+    folder = Path(loader.dirname_pattern).parent / target
+    basename = loader.format_filename(post, target=target)
     before = _post_files(folder, basename)
-    loader.download_post(post, target=owner)  # files already on disk are skipped
+    loader.download_post(post, target=target)  # files already on disk are skipped
     new = {n for n in _post_files(folder, basename) - before
            if Path(n).suffix.lower() in IMAGE_SUFFIXES | VIDEO_SUFFIXES}
     if tags:
@@ -363,3 +423,19 @@ def download_single_post(
         if hashtags and tag_post_images(folder, basename, hashtags):
             log(f"    tags: {'; '.join(hashtags)}")
     return PostResult(owner, saved=True, new_files=len(new))
+
+
+def username_for_id(loader: instaloader.Instaloader, userid: int) -> str | None:
+    """The account's current username (lowercase), or None if Instagram has no
+    such account or won't say. Used to spot a renamed account.
+
+    Without a login, Instagram may refuse this lookup; that also gives None.
+    Rate-limit and connection errors are raised as usual.
+    """
+    try:
+        profile = instaloader.Profile.from_id(loader.context, userid)
+    except ProfileNotExistsException:
+        return None
+    name = profile.username
+    # The name comes from Instagram and may become a list entry and a folder name.
+    return name.lower() if is_valid_username(name) else None

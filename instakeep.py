@@ -6,6 +6,7 @@ Run it from anywhere:
     python instakeep.py --run        download for every saved user, no window
     python instakeep.py --check      show the setup status
     python instakeep.py --list | --add NAME | --remove NAME
+    python instakeep.py --rescan NAME    next "all posts" run looks at every post again
 
 On first start it checks its setup and, after asking, creates .venv and installs
 InstaKeep's dependencies (instaloader, piexif) into it. Only the standard library is used before that.
@@ -39,6 +40,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     mode.add_argument("--list", action="store_true", help="print the saved users")
     mode.add_argument("--add", metavar="NAME", nargs="+", help="add users to the list")
     mode.add_argument("--remove", metavar="NAME", nargs="+", help="remove users from the list")
+    mode.add_argument("--rescan", metavar="NAME", nargs="+",
+                      help="make the next 'all posts' download of these users look at every post "
+                           "again, instead of stopping at posts already downloaded")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return p.parse_args(argv)
 
@@ -75,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         print(text)
         return 0 if ok else bootstrap.EXIT_SETUP
 
-    gui = not (args.run or args.list or args.add or args.remove)
+    gui = not (args.run or args.list or args.add or args.remove or args.rescan)
     if args.run:
         code = bootstrap.ensure_ready(argv, ask=None, need_tk=False, say=_headless_say)
     else:
@@ -84,8 +88,11 @@ def main(argv: list[str] | None = None) -> int:
         return code
 
     # Setup is fine: igdl and its dependencies can be imported from here on.
-    from instakeep.store import Store
+    from instakeep.store import NewerStoreError, Store
     store = Store(paths.STORE_FILE, paths.DEFAULT_OUTPUT)
+    if store.too_new and (args.add or args.remove or args.rescan):
+        print(f"error: {NewerStoreError(store.path, store.file_version)}", file=sys.stderr)
+        return bootstrap.EXIT_SETUP
 
     if args.run:
         from instakeep import runner
@@ -108,6 +115,10 @@ def main(argv: list[str] | None = None) -> int:
         for name in args.remove:
             print(("removed " if store.remove_user(name) else "not listed ") + strip_control(name))
         return 0
+    if args.rescan:
+        changed = store.request_full_scan(args.rescan)
+        print(f"{changed} user(s) will have every post looked at on the next 'all posts' download.")
+        return 0 if changed == len(args.rescan) else 2
 
     from instakeep import gui as window
     return window.main(store)

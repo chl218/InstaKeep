@@ -167,7 +167,7 @@ def _run_post(app, add_owner, download_post):
 
 def test_post_download_can_add_its_account(app, store):
     from igdl import downloader
-    _run_post(app, True, lambda loader, code, log, tags: downloader.PostResult("nasa_hubble", True, 3))
+    _run_post(app, True, lambda loader, code, log, tags, **kw: downloader.PostResult("nasa_hubble", True, 3))
     assert "nasa_hubble" in store.usernames()
     assert app.tree.exists("nasa_hubble")
     log = app.log_box.get("1.0", "end")
@@ -178,7 +178,7 @@ def test_post_download_can_add_its_account(app, store):
 
 def test_post_download_leaves_the_list_alone_when_unticked(app, store):
     from igdl import downloader
-    _run_post(app, False, lambda loader, code, log, tags: downloader.PostResult("nasa_hubble", True, 1))
+    _run_post(app, False, lambda loader, code, log, tags, **kw: downloader.PostResult("nasa_hubble", True, 1))
     assert store.usernames() == ["natgeo", "nasa"]
     assert app.post_owner == "nasa_hubble"  # Open folder goes there
 
@@ -186,10 +186,155 @@ def test_post_download_leaves_the_list_alone_when_unticked(app, store):
 def test_missing_post_shows_a_short_error(app, store, dialogs):
     from instaloader.exceptions import BadResponseException
 
-    def gone(loader, code, log, tags):
+    def gone(loader, code, log, tags, **kw):
         raise BadResponseException("Fetching Post metadata failed.")
 
     _run_post(app, True, gone)
     assert dialogs.texts("showerror") == [
         "post 'DXwaXSSEuX8' couldn't be loaded. It may have been deleted, or its account is private."]
     assert store.usernames() == ["natgeo", "nasa"]
+
+
+def _make_file_newer(store):
+    import json
+    data = json.loads(store.path.read_text(encoding="utf-8"))
+    store.path.write_text(json.dumps({**data, "version": 99}), encoding="utf-8")
+
+
+def test_newer_data_file_locks_the_window_instead_of_downloading(app, store, dialogs):
+    _make_file_newer(store)  # e.g. a newer --run after a git pull
+    app._start(None)
+    assert app.worker is None  # nothing downloaded that couldn't be recorded
+    assert app.store_blocked
+    assert "newer version of InstaKeep" in dialogs.texts("showwarning")[0]
+    for button in (app.all_button, app.sel_button, app.post_button, app.add_button):
+        assert str(button.cget("state")) == "disabled"
+    app._set_running(False)  # e.g. after a run: stays locked
+    assert str(app.all_button.cget("state")) == "disabled"
+    assert app.tree.exists("natgeo")  # the list is still shown
+
+
+def test_newer_data_file_found_on_a_settings_change(app, store, dialogs):
+    _make_file_newer(store)
+    app.videos.set(True)  # saving the option fails: the window locks, no traceback dialog
+    assert app.store_blocked and dialogs.texts("showerror") == []
+    assert len(dialogs.texts("showwarning")) == 1
+    app.caption.set(True)
+    assert len(dialogs.texts("showwarning")) == 1  # told once
+
+
+def test_window_opened_on_a_newer_file_starts_locked(tk_root, store, dialogs):
+    _make_file_newer(store)
+    window = tk.Toplevel(tk_root)
+    window.withdraw()
+    try:
+        app = gui.App(window, Store(store.path, store.default_output))
+        assert app.store_blocked
+        assert str(app.all_button.cget("state")) == "disabled"
+    finally:
+        window.destroy()
+
+
+def test_full_rescan_selected(app, store):
+    store.record_result("natgeo", "ok", ok=True, full_scan=True)
+    app.store.reload()
+    app.tree.selection_set(["natgeo"])
+    app._rescan_selected()
+    assert store.users[0]["full_scan_done"] is False
+    assert "looks at every post again" in app.status.get()
+
+
+def test_post_download_uses_a_renamed_accounts_folder(app, store):
+    from igdl import downloader
+    store.rename_user("natgeo", "natgeo_new")
+    seen = []
+
+    def download_post(loader, code, log, tags, folder_for):
+        seen.append(folder_for("natgeo_new"))
+        return downloader.PostResult("natgeo_new", True, 1)
+    _run_post(app, False, download_post)
+    assert seen == ["natgeo"]
+
+
+def test_cells_are_right_aligned_and_headings_centered(app):
+    for key in gui.COLUMNS:
+        assert str(app.tree.column(key, "anchor")) == "e"
+        assert str(app.tree.heading(key, "anchor")) == "center"
+
+
+def test_columns_are_as_wide_as_their_longest_text(app):
+    cell_font = tkfont.nametofont("TkDefaultFont")
+    heading_font = tkfont.nametofont("TkHeadingFont")
+    rows = [app.tree.item(iid)["values"] for iid in app.tree.get_children()]
+    for i, (key, heading) in enumerate(gui.COLUMNS.items()):
+        longest = max([heading_font.measure(heading + gui.SORT_DOWN)]
+                      + [cell_font.measure(str(row[i])) for row in rows])
+        assert app.tree.column(key, "width") == longest + gui.CELL_PADDING
+        assert not app.tree.column(key, "stretch")
+
+
+def test_ticking_time_widens_its_column(app):
+    before = app.tree.column("time", "width")
+    app.timing = ("natgeo", time.monotonic() - 100 * 3600 - 59 * 60)  # "100 h 59 min"
+    app._tick_timer()
+    needed = tkfont.nametofont("TkDefaultFont").measure("100 h 59 min") + gui.CELL_PADDING
+    assert app.tree.column("time", "width") >= needed > before
+
+
+def test_clicking_a_heading_sorts_and_clicking_again_reverses(app):
+    assert app.tree.get_children() == ("natgeo", "nasa")  # the saved list order
+    assert app.tree.heading("images", "command")  # every heading is clickable
+    app._sort_by("images")
+    assert app.tree.get_children() == ("nasa", "natgeo")  # 0 images, then 6
+    assert app.tree.heading("images", "text") == "Images" + gui.SORT_UP
+    app._sort_by("images")
+    assert app.tree.get_children() == ("natgeo", "nasa")
+    assert app.tree.heading("images", "text") == "Images" + gui.SORT_DOWN
+    app._sort_by("user")
+    assert app.tree.get_children() == ("nasa", "natgeo")
+    assert app.tree.heading("images", "text") == "Images"  # only one arrow
+
+
+def test_sort_stays_after_the_table_is_redrawn(app, store):
+    app._sort_by("user")
+    store.add_user("aaa")
+    app._refresh_table()
+    assert app.tree.get_children() == ("aaa", "nasa", "natgeo")
+
+
+def test_sorting_uses_values_not_the_shown_text():
+    from instakeep.store import empty_stats
+
+    def user(name, seconds, ran=True):
+        stats = {**empty_stats(), "last_seconds": seconds}
+        return {"username": name, "last_run": "2026-01-01T00:00:00" if ran else None, "stats": stats}
+
+    users = [user("slow", 75), user("fast", 45), user("never", 0, ran=False)]
+    # "1 min 15 s" < "45 s" as text, but 75 > 45 seconds.
+    assert [u["username"] for u in gui.sort_users(users, "time")] == ["never", "fast", "slow"]
+    assert [u["username"] for u in gui.sort_users(users, None)] == ["slow", "fast", "never"]
+
+
+def test_grid_lines_border_every_cell():
+    # Two columns (50 and 30 px wide), two rows 20 px high starting below a 25 px heading.
+    rows = [(1, 25, 80, 20), (1, 45, 80, 20)]
+    lines = gui.grid_lines([50, 30], rows)
+    assert (1, 44, 80, 1) in lines and (1, 64, 80, 1) in lines  # under each row
+    assert (50, 25, 1, 40) in lines and (80, 25, 1, 40) in lines  # column edges, below the heading
+    assert len(lines) == 4
+    assert gui.grid_lines([50, 30], []) == []  # empty table: no lines
+
+
+def test_drawing_the_grid_places_a_line_per_border(app, monkeypatch):
+    # A hidden window has no row positions (bbox is empty), so give it some.
+    boxes = {"natgeo": (1, 25, 300, 20), "nasa": (1, 45, 300, 20)}
+    monkeypatch.setattr(app.tree, "bbox", lambda iid, column=None: boxes.get(iid, ""))
+    app._draw_grid()
+    widths = [int(app.tree.column(k, "width")) for k in gui.COLUMNS]
+    expected = gui.grid_lines(widths, [boxes[i] for i in app.tree.get_children()])
+    placed = [f for f in app.grid_frames if f.winfo_manager() == "place"]
+    assert [(int(f.place_info()["x"]), int(f.place_info()["y"]),
+             int(f.place_info()["width"]), int(f.place_info()["height"])) for f in placed] == expected
+    boxes.pop("nasa")  # one row scrolled out of view: its lines are hidden, not left behind
+    app._draw_grid()
+    assert len([f for f in app.grid_frames if f.winfo_manager() == "place"]) == len(gui.COLUMNS) + 1

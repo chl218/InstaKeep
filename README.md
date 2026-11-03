@@ -34,15 +34,20 @@ Files go to `InstaKeep/downloads/<username>/` unless you pick another folder. Ex
 
 | Part | What it does |
 |------|--------------|
-| User table | Your saved list. Last download, Result (`ok`, `stopped`, `not found`...) and Downloaded (files saved) describe the latest run. Time counts up while that user downloads, then shows how long the run took. Longest is the slowest run so far. Total time, Images and Videos add up every download of that user. |
+| User table | Your saved list. Last download, Result (`ok`, `stopped`, `not found`...) and Downloaded (files saved) describe the latest run. Time counts up while that user downloads, then shows how long the run took. Longest is the slowest run so far. Total time, Images and Videos add up every download of that user. Click a column heading to sort by it, and click again to reverse. |
 | Username box + **Add** | Adds a user (Enter works too). You can type `@name`. Invalid names and duplicates are refused. |
 | **Remove selected** (or Delete key) | Removes users from the list. Downloaded files are kept. |
+| **Full re-scan selected** | Makes the next Download all posts run of those users look at every post again, to fill gaps (see below). It doesn't start a download. |
 | Download all posts / Newest _N_ posts per user | Newest 5 by default. Tick Download all posts to get every post; the Newest box is greyed out while it's ticked. Both are also used by `--run`. |
 | Videos / Caption (.txt) / #tags / Metadata | #tags starts on and the others start off. See [Captions and hashtag Tags](#captions-and-hashtag-tags). |
 | **Download all** / **Download selected** | Downloads for those users. **Stop** finishes the current post and then stops, and it also works during a rate-limit pause. |
 | **Open folder** | Opens the selected user's folder, or the output folder. |
 
-If one user fails because the profile doesn't exist or is private, the others still run. If Instagram rate-limits or blocks requests, the remaining users are skipped.
+If one user fails because the profile doesn't exist or is private, the others still run. If Instagram rate-limits or blocks requests, the remaining users are skipped. **Download all** (and `--run`) starts with whoever has gone longest without a successful download, so the users a rate limit skipped go first next time. **Download selected** keeps the list order.
+
+With Download all posts, a user's first download looks at every post. After that, a run stops once it reaches 3 posts in a row that are already downloaded (not counting the first 3, which may be old pinned posts). That keeps large profiles from using hundreds of Instagram requests on every run. If files went missing or a download was interrupted part way, use **Full re-scan selected** to look at every post again.
+
+If a saved user isn't found, InstaKeep looks up the account by its ID (saved after each successful download). If the account was renamed, the list switches to the new name and its posts keep going into the old folder, so the history stays in one place. The new name downloads from the next run. Without a login Instagram doesn't always answer this lookup; then the user stays "not found".
 
 ### Individual
 
@@ -71,6 +76,7 @@ python instakeep.py --check             # setup status
 python instakeep.py --list
 python instakeep.py --add natgeo nasa
 python instakeep.py --remove nasa
+python instakeep.py --rescan natgeo     # next "all posts" download looks at every post again
 ```
 
 `--run` appends to `logs/run-YYYY-MM-DD.log` and keeps the last 30 log files. A `--run` and the window never download at the same time; whichever starts second gives up and says so.
@@ -81,10 +87,12 @@ Known problems (a profile that doesn't exist, a private profile, a rate limit) g
 |---|---|
 | 0 | every user OK |
 | 1 | at least one user failed, or a bug (with a traceback) |
-| 3 | setup incomplete (run `python instakeep.py` once to install) |
+| 3 | setup incomplete (run `python instakeep.py` once to install), or `data/instakeep.json` was saved by a newer InstaKeep (see below) |
 | 4 | rate-limited or blocked by Instagram |
 | 5 | another download was already running |
 | 130 | interrupted (Ctrl+C) |
+
+`data/instakeep.json` has a data version. A newer InstaKeep upgrades an older file when it opens it. An older InstaKeep can still read a newer file but won't save to it, because it would drop the settings it doesn't know. That can happen when the window has been open since before a `git pull` and the next `--run` uses the new code. The window then turns off downloading and editing and asks for a restart; `--run`, `--add`, `--remove` and `--rescan` exit with code 3.
 
 ## Single profile: `igdl`
 

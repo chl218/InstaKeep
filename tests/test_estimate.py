@@ -83,3 +83,30 @@ def test_rate_limit_pauses_from_instaloaders_limit():
 def test_rate_limit_pauses_from_history_when_larger():
     history = [merge_stats(empty_stats(), {"queries": 10, "pause_seconds": 100})]
     assert est.pause_seconds(5, history) == pytest.approx(50)  # 10 s per request seen before
+
+
+def test_all_posts_after_a_full_pass_counts_only_the_new_posts():
+    # A big profile: 3000 posts, fully downloaded once, 2 new posts last time.
+    stats = dict(runs=2, seconds=4000, posts=3010, new_posts=3000, images=3000, image_seconds=3000,
+                 queries=260, media_count=3000, last_images=2)
+    full = est.estimate([{**user(**stats), "full_scan_done": False}], settings(all_posts=True))
+    quick = est.estimate([{**user(**stats), "full_scan_done": True}], settings(all_posts=True))
+    assert full.users[0].checked_posts == 3000
+    assert quick.users[0].new_posts == pytest.approx(2)
+    assert quick.users[0].checked_posts == pytest.approx(2 + est.MAX_PINNED + est.KNOWN_STREAK)
+    assert quick.total_seconds < full.total_seconds / 100
+
+
+def test_full_rescan_is_estimated_per_post():
+    # Runs that stopped early make the per-run average tiny; the per-post rate stays right.
+    stats = dict(runs=10, seconds=1000, posts=1000, new_posts=1000, images=1000, image_seconds=500,
+                 media_count=1000, last_images=1)
+    one = est.estimate([{**user(**stats), "full_scan_done": False}], settings(all_posts=True)).users[0]
+    check = (1000 - 500 - est.USER_SECONDS * 10) / 1000
+    assert one.seconds == pytest.approx(est.USER_SECONDS + 1000 * check + 1 * 0.5)
+
+
+def test_constants_match_igdl():
+    from igdl import downloader
+    assert est.MAX_PINNED == downloader.MAX_PINNED
+    assert est.KNOWN_STREAK == downloader.KNOWN_STREAK

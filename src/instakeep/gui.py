@@ -13,6 +13,10 @@ _poll_messages() reads on the main thread every POLL_MS milliseconds:
   ("user_done", result)    one user finished: refresh its row
   ("post_owner", name, add) single post: its account is known; add=True adds it to the list
   ("done", text, ok)       the whole run finished
+
+If a newer InstaKeep wrote the data file, this window can't save to it (it would
+drop fields it doesn't know): downloading and editing the list are turned off,
+and the status line asks for a restart. See store.NewerStoreError.
 """
 
 from __future__ import annotations
@@ -34,25 +38,77 @@ from igdl.security import describe_unexpected, parse_post_url, strip_control
 
 from . import paths, runner
 from .estimate import QUERY_LIMIT, QUERY_WINDOW, estimate, format_duration
-from .store import Store
+from .store import NewerStoreError, Store
 
 POLL_MS = 100  # how often the window checks for messages from the download thread
-CELL_PADDING = 24  # pixels left and right of the text in a table cell
+CELL_PADDING = 12  # pixels added to the longest text in a table column (both sides together)
 ROW_PADDING = 12   # pixels above and below the text in a table row
 
-# User table columns: heading, the widest text expected (sets the minimum width,
-# measured in the real font so it scales with the screen), and alignment.
+# User table columns and their headings. Headings are centered and cells
+# right-aligned. Each column is as wide as its longest text (see _fit_columns).
 COLUMNS = {
-    "user": ("Username", "a_long_instagram_name", "w"),
-    "last": ("Last download", "2026-12-31 23:59", "w"),
-    "result": ("Result", "rate-limited", "w"),
-    "count": ("Downloaded", "999999", "e"),
-    "time": ("Time", "59 min 59 s", "e"),
-    "longest": ("Longest", "99 h 59 min", "e"),
-    "total": ("Total time", "999 h 59 min", "e"),
-    "images": ("Images", "999999", "e"),
-    "videos": ("Videos", "999999", "e"),
+    "user": "Username",
+    "last": "Last download",
+    "result": "Result",
+    "count": "Downloaded",
+    "time": "Time",
+    "longest": "Longest",
+    "total": "Total time",
+    "images": "Images",
+    "videos": "Videos",
 }
+SORT_UP, SORT_DOWN = " ▲", " ▼"  # added to the heading of the sorted column
+
+
+def _ran(user: dict) -> bool:
+    return bool(user.get("last_run"))
+
+
+# What each column sorts by: the underlying values, not the shown text, so
+# "1 min 15 s" sorts after "45 s". Users never downloaded sort before everyone (-1).
+SORT_KEYS = {
+    "user": lambda u: u["username"],
+    "last": lambda u: u.get("last_run") or "",
+    "result": lambda u: format_result(u),
+    "count": lambda u: u["stats"]["last_images"] + u["stats"]["last_videos"] if _ran(u) else -1,
+    "time": lambda u: u["stats"]["last_seconds"] if _ran(u) else -1,
+    "longest": lambda u: u["stats"]["longest_seconds"],
+    "total": lambda u: u["stats"]["seconds"],
+    "images": lambda u: u["stats"]["images"],
+    "videos": lambda u: u["stats"]["videos"],
+}
+
+
+GRID_COLOR = "#d0d0d0"  # the table's cell borders
+
+
+def grid_lines(widths: list[int], rows: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
+    """The table's cell borders as 1-pixel rectangles (x, y, width, height).
+
+    widths: each column's width, left to right. rows: the visible rows' boxes
+    (x, y, width, height) from Treeview.bbox, top to bottom. One line under each
+    row, and one at the right edge of each column from the first row down, so
+    the headings (where columns are resized by dragging) stay uncovered.
+    """
+    if not rows:
+        return []
+    left, top = rows[0][0], rows[0][1]
+    bottom = rows[-1][1] + rows[-1][3]
+    right = left + sum(widths)
+    lines = [(left, y + h - 1, right - left, 1) for _x, y, _w, h in rows]
+    x = left
+    for width in widths:
+        x += width
+        lines.append((x - 1, top, 1, bottom - top))
+    return lines
+
+
+def sort_users(users: list[dict], column: str | None, descending: bool = False) -> list[dict]:
+    """The users ordered by a table column (None: the saved list order).
+    Ties keep the list order."""
+    if column is None:
+        return list(users)
+    return sorted(users, key=SORT_KEYS[column], reverse=descending)
 TITLE = "InstaKeep"
 SELECT_FIRST = "Select one or more users in the list first."
 MIN_HEIGHT = 700
@@ -108,6 +164,11 @@ class App:
         # The user being downloaded and when they started (for the live timer).
         self.timing: tuple[str, float] | None = None
         self.post_owner: str | None = None  # account of the last single post (Open folder)
+        self.store_blocked = False  # True: the data file is from a newer InstaKeep
+        # The table's sort: (column, descending), or None for the saved list order.
+        self.sort: tuple[str, bool] | None = None
+        self.grid_frames: list[tk.Frame] = []  # the drawn cell borders (see _draw_grid)
+        self._grid_pending = False
 
         # A bug in a button handler: also show its traceback in the log box.
         root.report_callback_exception = self._on_callback_error
@@ -141,6 +202,8 @@ class App:
 
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         root.after(POLL_MS, self._poll_messages)
+        if store.too_new:
+            self._block_for_newer_store(str(NewerStoreError(store.path, store.file_version)))
 
     # ------------------------------------------------------------------ layout
 
@@ -210,13 +273,21 @@ class App:
         line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
         ttk.Style(self.root).configure("Treeview", rowheight=line + ROW_PADDING)
         self.tree = ttk.Treeview(table, columns=tuple(COLUMNS), show="headings", height=8)
-        for key, (heading, _sample, anchor) in COLUMNS.items():
-            self.tree.heading(key, text=heading)
-            self.tree.column(key, anchor=anchor, stretch=key in ("user", "result"))
+        for key, heading in COLUMNS.items():
+            # Click a heading to sort by it; click again to reverse.
+            self.tree.heading(key, text=heading, anchor="center",
+                              command=lambda k=key: self._sort_by(k))
+            # stretch=False: a wider window doesn't widen the columns past their text.
+            self.tree.column(key, anchor="e", stretch=False)
         self.tree.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")
-        self.tree.configure(yscrollcommand=scroll.set)
+        # Treeview can't draw cell borders, so _draw_grid places thin lines over it.
+        # Redrawn after scrolling, resizing (window or a dragged column edge) and redrawing rows.
+        self.tree.configure(yscrollcommand=lambda *a: (scroll.set(*a), self._schedule_grid()))
+        self.tree.bind("<Configure>", lambda _e: self._schedule_grid(), add="+")
+        self.tree.bind("<ButtonRelease-1>", lambda _e: self._schedule_grid(), add="+")
+        self.tree.bind("<B1-Motion>", lambda _e: self._schedule_grid(), add="+")
         self.tree.bind("<Delete>", lambda _e: self._remove_selected())
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self._refresh_estimate())
         main.rowconfigure(0, weight=1)
@@ -229,8 +300,12 @@ class App:
         entry.grid(row=0, column=1, padx=(0, 6))
         entry.bind("<Return>", lambda _e: self._add_user())
         entry.focus_set()
-        ttk.Button(edit, text="Add", command=self._add_user).grid(row=0, column=2, padx=(0, 6))
-        ttk.Button(edit, text="Remove selected", command=self._remove_selected).grid(row=0, column=3)
+        self.add_button = ttk.Button(edit, text="Add", command=self._add_user)
+        self.add_button.grid(row=0, column=2, padx=(0, 6))
+        self.remove_button = ttk.Button(edit, text="Remove selected", command=self._remove_selected)
+        self.remove_button.grid(row=0, column=3, padx=(0, 6))
+        self.rescan_button = ttk.Button(edit, text="Full re-scan selected", command=self._rescan_selected)
+        self.rescan_button.grid(row=0, column=4)
 
         # How many posts per user. "Download all posts" greys out the "Newest N" box.
         lim = ttk.Frame(main)
@@ -294,7 +369,8 @@ class App:
         """Redraw the user table from the store, keeping the selection."""
         selected = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
-        for user in self.store.users:
+        column, descending = self.sort or (None, False)
+        for user in sort_users(self.store.users, column, descending):
             name, st = user["username"], user["stats"]
             ran = bool(user.get("last_run"))
             self.tree.insert("", "end", iid=name, values=(
@@ -313,7 +389,8 @@ class App:
         self._refresh_estimate()
 
     def _fit_columns(self) -> None:
-        """Make every column wide enough for its heading and text, and the window for the table.
+        """Make every column as wide as its longest text (heading included) plus
+        CELL_PADDING, and the window wide enough for the table.
 
         Widths are measured in the fonts the table really uses, so nothing is cut
         off on high-DPI screens where text is larger than a fixed pixel width.
@@ -322,14 +399,60 @@ class App:
         heading_font = tkfont.nametofont("TkHeadingFont")
         rows = [self.tree.item(iid)["values"] for iid in self.tree.get_children()]
         total = 0
-        for i, (key, (heading, sample, _anchor)) in enumerate(COLUMNS.items()):
-            texts = [sample] + [str(row[i]) for row in rows if i < len(row)]
-            width = max([heading_font.measure(heading)] + [cell_font.measure(t) for t in texts])
+        for i, (key, heading) in enumerate(COLUMNS.items()):
+            texts = [str(row[i]) for row in rows if i < len(row)]
+            # Room for the sort arrow, so sorting doesn't change the column widths.
+            width = max([heading_font.measure(heading + SORT_DOWN)]
+                        + [cell_font.measure(t) for t in texts])
             width += CELL_PADDING
             self.tree.column(key, width=width, minwidth=width)
             total += width
         # Table + scrollbar + the frame and grid padding around it.
         self.root.minsize(total + 80, MIN_HEIGHT)
+        self._schedule_grid()
+
+    def _schedule_grid(self) -> None:
+        """Redraw the cell borders once Tk is idle (many changes in a row draw once)."""
+        if not self._grid_pending:
+            self._grid_pending = True
+            self.tree.after_idle(self._draw_grid)
+
+    def _draw_grid(self) -> None:
+        """Place thin lines over the table along every row and column edge."""
+        self._grid_pending = False
+        if not self.tree.winfo_exists():
+            return
+        widths = [int(self.tree.column(key, "width")) for key in COLUMNS]
+        rows = [box for box in (self.tree.bbox(iid) for iid in self.tree.get_children()) if box]
+        lines = grid_lines(widths, rows)
+        while len(self.grid_frames) < len(lines):
+            line = tk.Frame(self.tree, background=GRID_COLOR, borderwidth=0, highlightthickness=0)
+            # A click on a line still selects the row underneath.
+            line.bind("<Button-1>", self._click_through)
+            self.grid_frames.append(line)
+        for line, (x, y, w, h) in zip(self.grid_frames, lines):
+            line.place(x=x, y=y, width=w, height=h)
+        for line in self.grid_frames[len(lines):]:
+            line.place_forget()
+
+    def _click_through(self, event) -> None:
+        """Select the row under a grid line, as a click on the table would."""
+        y = event.widget.winfo_y() + event.y
+        row = self.tree.identify_row(y)
+        if row:
+            self.tree.selection_set(row)
+            self.tree.focus(row)
+
+    def _sort_by(self, column: str) -> None:
+        """A heading was clicked: sort by that column, or reverse it if it already is."""
+        if self.sort and self.sort[0] == column:
+            self.sort = (column, not self.sort[1])
+        else:
+            self.sort = (column, False)
+        for key, heading in COLUMNS.items():
+            arrow = (SORT_DOWN if self.sort[1] else SORT_UP) if key == column else ""
+            self.tree.heading(key, text=heading + arrow)
+        self._refresh_table()
 
     def _refresh_estimate(self) -> None:
         """Recompute both estimate lines (all users, and the selected ones)."""
@@ -347,7 +470,12 @@ class App:
         """Show the running user's elapsed time in their "Time" cell."""
         if self.timing and self.tree.exists(self.timing[0]):
             name, started = self.timing
-            self.tree.set(name, "time", format_duration(time.monotonic() - started))
+            text = format_duration(time.monotonic() - started)
+            self.tree.set(name, "time", text)
+            # The ticking time can outgrow the column (e.g. "59 s" -> "1 min 0 s").
+            needed = tkfont.nametofont("TkDefaultFont").measure(text) + CELL_PADDING
+            if needed > int(self.tree.column("time", "width")):
+                self._fit_columns()
 
     def _add_user(self) -> None:
         """Add the name in the entry box (the store validates it)."""
@@ -356,6 +484,9 @@ class App:
             return
         try:
             added = self.store.add_user(text)
+        except NewerStoreError as e:
+            self._block_for_newer_store(str(e))
+            return
         except ValueError as e:
             messagebox.showwarning(TITLE, str(e), parent=self.root)
             return
@@ -379,10 +510,28 @@ class App:
         if not messagebox.askyesno(TITLE, f"Remove {listed} from the list?\n\n"
                                    "Downloaded files are kept.", parent=self.root):
             return
-        for name in names:
-            self.store.remove_user(name)
+        try:
+            for name in names:
+                self.store.remove_user(name)
+        except NewerStoreError as e:
+            self._block_for_newer_store(str(e))
+            return
         self._refresh_table()
         self.status.set(f"Removed {len(names)} user(s).")
+
+    def _rescan_selected(self) -> None:
+        """Make the next "all posts" download of the selected users look at every
+        post again, instead of stopping at posts already on disk (fills gaps)."""
+        names = self._selected_names()
+        if not names:
+            return
+        try:
+            changed = self.store.request_full_scan(names)
+        except NewerStoreError as e:
+            self._block_for_newer_store(str(e))
+            return
+        self._refresh_table()
+        self.status.set(f"The next \"all posts\" download of {changed} user(s) looks at every post again.")
 
     # --------------------------------------------------------------- settings
 
@@ -417,7 +566,11 @@ class App:
             values["limit"] = limit
         if self.output_dir.get().strip():
             values["output_dir"] = self.output_dir.get().strip()
-        self.store.update_settings(**values)
+        try:
+            self.store.update_settings(**values)
+        except NewerStoreError as e:
+            self._block_for_newer_store(str(e))
+            return
         self._refresh_estimate()
 
     def _pick_output_dir(self) -> None:
@@ -442,6 +595,8 @@ class App:
         if not self.all_posts.get() and self._read_limit() is None:
             messagebox.showwarning(TITLE, "The number of posts must be 1 or more.", parent=self.root)
             return
+        if not self._store_writable():
+            return
         self._launch(self._run, only)
 
     def _start_post(self) -> None:
@@ -454,6 +609,8 @@ class App:
             messagebox.showwarning(TITLE, str(e), parent=self.root)
             return
         self._save_settings()
+        if not self._store_writable():
+            return
         # Plain values for the worker: it must not read tkinter variables.
         self._launch(self._run_post, shortcode, self.add_owner.get(), self.store.settings)
 
@@ -468,9 +625,33 @@ class App:
         self.worker.start()
 
     def _set_running(self, running: bool) -> None:
+        idle = "disabled" if self.store_blocked else "normal"
         for button in (self.all_button, self.sel_button, self.post_button):
-            button.configure(state="disabled" if running else "normal")
+            button.configure(state="disabled" if running else idle)
         self.stop_button.configure(state="normal" if running else "disabled")
+
+    def _store_writable(self) -> bool:
+        """Re-read the data file. False (and the window locked) if a newer InstaKeep wrote it."""
+        try:
+            self.store.check_writable()
+        except NewerStoreError as e:
+            self._block_for_newer_store(str(e))
+            return False
+        return True
+
+    def _block_for_newer_store(self, text: str) -> None:
+        """A newer InstaKeep wrote the data file: turn off everything that saves.
+
+        Shown once; the list stays visible. Restarting runs the new version.
+        """
+        first_time = not self.store_blocked
+        self.store_blocked = True
+        for button in (self.all_button, self.sel_button, self.post_button,
+                       self.add_button, self.remove_button, self.rescan_button):
+            button.configure(state="disabled")
+        self.status.set("Read-only: a newer InstaKeep updated the data file. Restart InstaKeep.")
+        if first_time:
+            messagebox.showwarning(TITLE, text, parent=self.root)
 
     def _stop(self) -> None:
         # Checked before each post (the current post finishes first) and every
@@ -501,6 +682,8 @@ class App:
             ok = sum(r.ok for r in results)
             new = sum(r.new_files for r in results)
             put(("done", f"Done. {ok}/{len(results)} user(s) OK, {new} new file(s).", True))
+        except NewerStoreError as e:
+            put(("done", str(e), False))  # the reload on "done" locks the window
         except Exception as e:  # noqa: BLE001 - every failure must reach the window
             put(("done", describe_unexpected(e), False))
         finally:
@@ -525,7 +708,8 @@ class App:
                 on_pause=lambda secs: put(("pause", secs)), should_stop=self.stop_requested.is_set,
             )
             loader.context.error = lambda msg, repeat_at_end=True: log(f"warning: {msg}")
-            result = download_post(loader, shortcode, log=log, tags=settings["tags"])
+            result = download_post(loader, shortcode, log=log, tags=settings["tags"],
+                                   folder_for=self.store.folder_of)
             put(("post_owner", result.owner, add_owner))
             if not result.saved:
                 put(("done", "Nothing downloaded: the post is a video.", True))
@@ -574,7 +758,9 @@ class App:
                     self._set_running(False)
                     self.store.reload()
                     self._refresh_table()
-                    if not ok:
+                    if self.store.too_new:
+                        self._block_for_newer_store(text)
+                    elif not ok:
                         self._show_error(text)
         except queue.Empty:
             pass
@@ -588,6 +774,9 @@ class App:
             return
         try:
             added = self.store.add_user(owner)
+        except NewerStoreError as e:
+            self._block_for_newer_store(str(e))
+            return
         except ValueError as e:  # download_single_post already checked it; just in case
             self._append_log(f"Couldn't add @{owner}: {e}")
             return
@@ -619,7 +808,9 @@ class App:
         else:
             selected = self.tree.selection()
             name = selected[0] if selected else None
-        folder = base / name if name and (base / name).is_dir() else base
+        # A renamed account keeps its old folder.
+        sub = self.store.folder_of(name) if name else None
+        folder = base / sub if sub and (base / sub).is_dir() else base
         if not folder.is_dir():
             messagebox.showinfo(TITLE, f"{folder} doesn't exist yet. Download something first.",
                                 parent=self.root)
