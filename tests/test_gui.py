@@ -44,6 +44,14 @@ def app(tk_root, store):
     window.destroy()
 
 
+def select(app, names):
+    """Select rows like a click does. selection_set() only queues <<TreeviewSelect>>,
+    and macOS doesn't reliably deliver queued events to a hidden window, so send
+    the event directly (event_generate runs the binding right away)."""
+    app.tree.selection_set(names)
+    app.tree.event_generate("<<TreeviewSelect>>")
+
+
 def test_table_shows_times_and_counts(app):
     assert app.tree["columns"] == tuple(gui.COLUMNS)
     row = dict(zip(gui.COLUMNS, app.tree.item("natgeo")["values"]))
@@ -75,15 +83,13 @@ def test_estimate_for_all_and_selected(app):
     assert app.estimate_all.get().startswith("All 2 user(s): about ")
     assert "rate-limit pauses" in app.estimate_all.get()
     assert app.estimate_selected.get().startswith("Select users")
-    app.tree.selection_set(["natgeo"])
-    app.root.update()
+    select(app, ["natgeo"])
     assert app.estimate_selected.get().startswith("Selected (1): about ")
 
 
 def test_estimate_leaves_out_users_never_downloaded(app):
     assert "Not counted: 1 user(s) never downloaded" in app.estimate_all.get()
-    app.tree.selection_set(["nasa"])
-    app.root.update()
+    select(app, ["nasa"])
     assert "none of them has been downloaded before" in app.estimate_selected.get()
 
 
