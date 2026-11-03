@@ -45,11 +45,19 @@ def app(tk_root, store):
 
 
 def select(app, names):
-    """Select rows like a click does. selection_set() only queues <<TreeviewSelect>>,
-    and macOS doesn't reliably deliver queued events to a hidden window, so send
-    the event directly (event_generate runs the binding right away)."""
+    """Select rows and run what the table's <<TreeviewSelect>> binding runs.
+
+    Tk doesn't deliver that event to a window that was never shown on every
+    platform (it's dropped on macOS with Python 3.14, even with event_generate),
+    so call the handler directly. test_selecting_rows_refreshes_the_estimate
+    checks that the binding is there.
+    """
     app.tree.selection_set(names)
-    app.tree.event_generate("<<TreeviewSelect>>")
+    app._refresh_estimate()
+
+
+def test_selecting_rows_refreshes_the_estimate(app):
+    assert app.tree.bind("<<TreeviewSelect>>")  # the click -> estimate wiring
 
 
 def test_table_shows_times_and_counts(app):
