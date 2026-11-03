@@ -1,7 +1,7 @@
 """Small helpers for handling untrusted input and text safely.
 
 Everything here uses only the standard library and has no network or file
-access, so it can run before setup is finished (main-program.py uses it) and is
+access, so it can run before setup is finished (instakeep.py uses it) and is
 easy to test (see tests/test_security.py). Used by cli.py, downloader.py and
 the instakeep app.
 """
@@ -36,7 +36,7 @@ _POST_URL_RE = re.compile(
 
 
 def parse_post_url(text: str) -> str:
-    """'https://www.instagram.com/p/DXwaXSSEuX8/?srtk=...' -> 'DXwaXSSEuX8'.
+    """'https://www.instagram.com/p/EXAMPLE_POST/?igsh=...' -> 'EXAMPLE_POST'.
 
     Raises ValueError if the text isn't an Instagram post or reel link.
     """

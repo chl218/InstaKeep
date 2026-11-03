@@ -130,6 +130,17 @@ def test_record_result_adds_up_stats(store):
     assert set(st) == set(STAT_FIELDS)
     assert st["runs"] == 2 and st["seconds"] == 20 and st["images"] == 4 and st["videos"] == 2
     assert st["media_count"] == 41 and st["last_seconds"] == 2 and st["last_images"] == 1
+    assert st["longest_seconds"] == 10  # the slower of the two runs
+    store.record_result("natgeo", "ok, 0 new", run_stats={"runs": 1, "media_count": 0})
+    assert store.users[0]["stats"]["media_count"] == 41  # 0 = unknown: keeps the old count
+
+
+def test_longest_time_is_at_least_the_last_run(tmp_path):
+    # A file saved before longest_seconds existed.
+    path = tmp_path / "instakeep.json"
+    path.write_text(json.dumps({"users": [{"username": "u", "stats": {"last_seconds": 7}}]}),
+                    encoding="utf-8")
+    assert Store(path, tmp_path).users[0]["stats"]["longest_seconds"] == 7
 
 
 def test_bad_stats_in_file_become_zero(tmp_path):

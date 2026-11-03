@@ -73,7 +73,7 @@ TKINTER_HELP = (
 # ------------------------------------------------------------------- reporting
 
 def report() -> tuple[bool, str]:
-    """Setup status for `main-program.py --check`: (all good, text)."""
+    """Setup status for `instakeep.py --check`: (all good, text)."""
     ok = True
     lines = []
 
@@ -96,14 +96,14 @@ def report() -> tuple[bool, str]:
     for name in REQUIRED_MODULES:
         row(name not in missing, f"module {name}")
     if missing:
-        lines.append("Run `python main-program.py` to install the missing modules.")
+        lines.append("Run `python instakeep.py` to install the missing modules.")
     return ok, "\n".join(lines)
 
 
 # --------------------------------------------------------------------- actions
 
 def relaunch(python: Path, argv: list[str]) -> int:
-    """Run main-program.py again with another Python and return its exit code."""
+    """Run instakeep.py again with another Python and return its exit code."""
     return subprocess.run([str(python), str(paths.SCRIPT), *argv]).returncode
 
 

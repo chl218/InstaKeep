@@ -46,8 +46,12 @@ def app(tk_root, store):
 
 def test_table_shows_times_and_counts(app):
     assert app.tree["columns"] == tuple(gui.COLUMNS)
-    user, _last, last_time, total, images, videos = app.tree.item("natgeo")["values"]
-    assert (user, last_time, total, images, videos) == ("natgeo", "30 s", "30 s", 6, 0)
+    row = dict(zip(gui.COLUMNS, app.tree.item("natgeo")["values"]))
+    assert row["user"] == "natgeo" and row["result"] == "ok" and row["count"] == 6
+    assert (row["time"], row["longest"], row["total"]) == ("30 s", "30 s", "30 s")
+    assert (row["images"], row["videos"]) == (6, 0)
+    never = dict(zip(gui.COLUMNS, app.tree.item("nasa")["values"]))
+    assert never["last"] == "never" and never["result"] == never["count"] == ""
 
 
 def test_columns_fit_their_text(app):
@@ -76,9 +80,11 @@ def test_estimate_for_all_and_selected(app):
     assert app.estimate_selected.get().startswith("Selected (1): about ")
 
 
-def test_all_posts_estimate_mentions_unknown_post_counts(app):
-    app.all_posts.set(True)
-    assert "Post count not known yet for 1 user(s)" in app.estimate_all.get()
+def test_estimate_leaves_out_users_never_downloaded(app):
+    assert "Not counted: 1 user(s) never downloaded" in app.estimate_all.get()
+    app.tree.selection_set(["nasa"])
+    app.root.update()
+    assert "none of them has been downloaded before" in app.estimate_selected.get()
 
 
 def test_live_timer_counts_up(app):

@@ -1,140 +1,152 @@
 # Graph Report - InstaKeep  (2026-11-02)
 
 ## Corpus Check
-- 23 files · ~17,520 words
+- 24 files · ~20,838 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 502 nodes · 934 edges · 21 communities (13 shown, 8 thin omitted)
-- Extraction: 88% EXTRACTED · 12% INFERRED · 0% AMBIGUOUS · INFERRED: 108 edges (avg confidence: 0.87)
-- Token cost: 68,921 input · 0 output
+- 605 nodes · 1097 edges · 23 communities (16 shown, 7 thin omitted)
+- Extraction: 88% EXTRACTED · 12% INFERRED · 0% AMBIGUOUS · INFERRED: 127 edges (avg confidence: 0.87)
+- Token cost: 163,908 input · 0 output
 
 ## Community Hubs (Navigation)
-- Store & Usernames
-- igdl CLI & Downloader
-- Window (gui.py App)
-- Project Rules (CLAUDE.md)
-- Test Fixtures (conftest)
-- Setup Check (bootstrap)
-- igdl CLI Tests
+- Store & Username Validation
+- Entry Script & Error Policy
+- Window App (gui.App)
+- Project Architecture Docs
+- Download Time Estimates
+- Shared State & Test Rules
+- Downloader & CLI Tests
+- Setup Bootstrap
+- Hashtag EXIF Tags
+- Screenshot Generator
+- CI Test Workflow
 - Runner Tests
-- Security & Tag Tests
-- Time Estimates
-- Security Helpers
-- Headless Run & Stats
+- Window Tests
 - Stats Merge & Estimate Tests
-- Entry Point (main-program)
-- Hashtag Tags (EXIF)
-- Run Lock & Worker
-- Logs & Media Files
-- Duration Formatting
+- README Usage Docs
+- Security Tests
+- Test Fixtures
+- Version Sync Rule
 - instakeep Package
 
 ## God Nodes (most connected - your core abstractions)
-1. `Store` - 33 edges
-2. `App` - 30 edges
-3. `strip_control()` - 19 edges
-4. `run_all()` - 16 edges
-5. `InstaKeep CLAUDE.md Project Guide` - 15 edges
+1. `App` - 38 edges
+2. `Store` - 37 edges
+3. `strip_control()` - 21 edges
+4. `run_all()` - 20 edges
+5. `describe_unexpected()` - 14 edges
 6. `download_user()` - 13 edges
-7. `run_headless()` - 13 edges
-8. `describe_unexpected()` - 12 edges
-9. `run()` - 12 edges
-10. `normalize_username()` - 11 edges
+7. `ensure_ready()` - 13 edges
+8. `RunLock` - 13 edges
+9. `run_headless()` - 13 edges
+10. `run()` - 12 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `Startup Constraint (stdlib-only modules)` --semantically_similar_to--> `Stdlib-only Until Setup Passes`  [INFERRED] [semantically similar]
-  memory/python/CLAUDE.md → CLAUDE.md
-- `Error Rules (single mapping, boundary catches with noqa reason)` --semantically_similar_to--> `Error Handling Policy (describe_error / describe_unexpected)`  [INFERRED] [semantically similar]
-  memory/python/CLAUDE.md → CLAUDE.md
-- `Shared State and Thread Rules` --semantically_similar_to--> `Window and --run Share data/instakeep.json`  [INFERRED] [semantically similar]
-  memory/python/CLAUDE.md → CLAUDE.md
-- `Shared State and Thread Rules` --semantically_similar_to--> `GUI Worker Thread + App.messages Queue`  [INFERRED] [semantically similar]
-  memory/python/CLAUDE.md → CLAUDE.md
-- `Untrusted Input Rules (validate, strip_control, no shell=True)` --semantically_similar_to--> `Untrusted Input Handling`  [INFERRED] [semantically similar]
-  memory/python/CLAUDE.md → CLAUDE.md
+- `First-start setup check (Python 3.10+, tkinter, venv install)` --references--> `ensure_ready()`  [INFERRED]
+  README.md → src/instakeep/bootstrap.py
+- `Download Log Pane and Status Bar` --conceptually_related_to--> `run_all()`  [INFERRED]
+  docs/screenshot-batch.png → src/instakeep/runner.py
+- `Network and rate-limit rules (no login, never skip RateController pauses)` --rationale_for--> `_PauseAwareRateController`  [INFERRED]
+  memory/python/CLAUDE.md → src/igdl/downloader.py
+- `Post link field + Download post button (single post/reel download)` --conceptually_related_to--> `download_single_post()`  [INFERRED]
+  docs/screenshot-individual.png → src/igdl/downloader.py
+- `InstaKeep Batch Tab Screenshot` --references--> `App`  [INFERRED]
+  docs/screenshot-batch.png → src/instakeep/gui.py
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **Cross-process coordination between window and --run** — claude_shared_store_between_processes, claude_atomic_store_mutate, claude_runlock, claude_settings_validation, memory_python_claude_shared_state_rules [EXTRACTED 1.00]
-- **Rate-limit visibility and stop handling** — claude_pause_aware_rate_controller, memory_python_claude_rate_limit_rules, memory_python_claude_should_stop, readme_estimated_download_time, readme_instaloader [INFERRED 0.85]
-- **Error mapping and exit-code contract** — claude_error_handling_policy, memory_python_claude_error_rules, claude_run_exit_codes, claude_igdl_exit_codes, claude_shared_run_all [INFERRED 0.85]
+- **Cross-process shared-store safety (window + --run)** — claude_shared_store_processes, claude_atomic_mutate, claude_run_lock, claude_settings_validation, memory_python_claude_shared_state_threads [EXTRACTED 1.00]
+- **Untrusted input defense** — claude_untrusted_input, memory_python_claude_untrusted_input, src_igdl_security_is_valid_username, src_igdl_security_strip_control [EXTRACTED 1.00]
+- **Error reporting flow (known errors vs bugs, exit codes)** — claude_error_handling_policy, memory_python_claude_errors, src_igdl_cli_describe_error, src_igdl_security_describe_unexpected, readme_run_exit_codes, readme_igdl_exit_codes [INFERRED 0.85]
 
-## Communities (21 total, 8 thin omitted)
+## Communities (23 total, 7 thin omitted)
 
-### Community 0 - "Store & Usernames"
+### Community 0 - "Store & Username Validation"
+Cohesion: 0.06
+Nodes (26): stub_store(), normalize_username(), _clean(), default_settings(), _optional_text(), Store, change(), change() (+18 more)
+
+### Community 1 - "Entry Script & Error Policy"
 Cohesion: 0.05
-Nodes (28): is_valid_username(), normalize_username(), _clean(), _clean_stats(), default_settings(), empty_stats(), _optional_text(), Store (+20 more)
+Nodes (18): _headless_say(), main(), parse_args(), run(), _write_log_line(), build_parser(), describe_error(), _err() (+10 more)
 
-### Community 1 - "igdl CLI & Downloader"
+### Community 3 - "Project Architecture Docs"
 Cohesion: 0.06
-Nodes (19): build_parser(), describe_error(), _err(), main(), parse_args(), positive_int(), build_loader(), _count_new_files() (+11 more)
+Nodes (21): igdl package (download library + CLI), InstaKeep (project guidance), instakeep package (the app), Timing and estimates (DownloadStats, STAT_FIELDS, estimate.py), Batch User Table (Username, Last download, Result, Downloaded, Time, Longest, Total time, Images, Videos), Python guidelines for InstaKeep, Caveats (public only, 401/429 blocks, rate-limit pauses), Estimated download time (+13 more)
 
-### Community 3 - "Project Rules (CLAUDE.md)"
+### Community 4 - "Download Time Estimates"
 Cohesion: 0.07
-Nodes (29): Absolute Paths in instakeep/paths.py, Store._mutate Atomic Re-read/Write, Headless Network-free Tests (conftest dialogs fixture), igdl Exit Codes (0,1,2,4,130), InstaKeep CLAUDE.md Project Guide, _PauseAwareRateController, Pinned Post Handling (limit + 3), --run Exit Codes (0,1,3,4,5,130) (+21 more)
+Nodes (16): ceil_queries(), _check_seconds(), Estimate, estimate(), estimate_user(), _expected_new_posts(), format_duration(), pause_seconds() (+8 more)
 
-### Community 4 - "Test Fixtures (conftest)"
+### Community 5 - "Shared State & Test Rules"
 Cohesion: 0.06
-Nodes (13): main(), app_files_in_tmp(), Dialogs, dialogs(), fake(), hidden_windows(), app(), store() (+5 more)
+Nodes (13): Store._mutate atomic read-modify-write, CI test workflow (Windows/Linux/macOS, Py 3.10 & 3.14), RunLock (data/run.lock, PID + staleness), exit_code(), make_logger(), log(), _media_files(), open_log() (+5 more)
 
-### Community 5 - "Setup Check (bootstrap)"
-Cohesion: 0.09
+### Community 6 - "Downloader & CLI Tests"
+Cohesion: 0.08
+Nodes (24): _fake_feed(), _fake_post(), _posts(), _rate_controller(), test_describe_error_for_a_single_post(), test_describe_error_maps_instaloader_errors(), test_images_only_by_default_and_limit_counts_images(), test_limit_includes_pinned_post_when_recent_enough() (+16 more)
+
+### Community 7 - "Setup Bootstrap"
+Cohesion: 0.08
 Nodes (15): _ask_console(), _ask_gui(), ensure_ready(), has_tkinter(), in_venv(), _install(), missing_modules(), relaunch() (+7 more)
 
-### Community 6 - "igdl CLI Tests"
+### Community 8 - "Hashtag EXIF Tags"
 Cohesion: 0.09
-Nodes (19): _fake_feed(), _posts(), _rate_controller(), test_describe_error_maps_instaloader_errors(), test_images_only_by_default_and_limit_counts_images(), test_limit_includes_pinned_post_when_recent_enough(), test_limit_must_be_positive(), test_limit_skips_old_pinned_posts() (+11 more)
+Nodes (18): _decode_xp(), _encode_xp(), extract_hashtags(), read_tags(), tag_post_images(), write_tags(), pid_alive(), test_pid_alive() (+10 more)
 
-### Community 7 - "Runner Tests"
-Cohesion: 0.15
-Nodes (19): Blocked, describe(), FakeLoader, context, make_download(), download_user(), NotFound, run() (+11 more)
+### Community 9 - "Screenshot Generator"
+Cohesion: 0.09
+Nodes (14): capture(), main(), write_png(), InstaKeep Batch Tab Screenshot, Download Options (Videos, Caption, #tags, Metadata, Output folder), Estimated Download Time Panel, Download Log Pane and Status Bar, Newest N Posts Per User / Download All Posts (+6 more)
 
-### Community 8 - "Security & Tag Tests"
-Cohesion: 0.11
-Nodes (11): test_is_valid_username(), _download_one(), fake_download_post(), make_jpeg(), test_download_leaves_tags_alone_when_tags_off(), test_download_writes_hashtags_when_tags_on(), test_extract_hashtags(), test_tag_post_images_single_and_carousel() (+3 more)
+### Community 10 - "CI Test Workflow"
+Cohesion: 0.07
+Nodes (29): concurrency, cancel-in-progress, group, jobs, pytest, os, python, name (+21 more)
 
-### Community 9 - "Time Estimates"
-Cohesion: 0.15
-Nodes (10): ceil_queries(), _check_seconds(), Estimate, estimate(), estimate_user(), _expected_new_posts(), pause_seconds(), _ratio() (+2 more)
+### Community 11 - "Runner Tests"
+Cohesion: 0.13
+Nodes (20): Blocked, describe(), FakeLoader, context, make_download(), download_user(), NotFound, run() (+12 more)
 
-### Community 11 - "Headless Run & Stats"
-Cohesion: 0.17
-Nodes (8): DownloadStats, exit_code(), make_logger(), log(), run_all(), run_headless(), _run_stats(), UserResult
+### Community 12 - "Window Tests"
+Cohesion: 0.10
+Nodes (8): app(), _run_post(), test_lock_failure_ends_the_run_and_reenables_buttons(), test_missing_post_shows_a_short_error(), test_post_download_can_add_its_account(), test_post_download_leaves_the_list_alone_when_unticked(), test_remove_asks_first_and_keeps_files(), tk_root()
 
-### Community 12 - "Stats Merge & Estimate Tests"
-Cohesion: 0.29
-Nodes (11): merge_stats(), settings(), test_all_posts_counts_whats_missing_from_disk(), test_all_posts_unknown_until_first_download(), test_format_duration(), test_history_sets_the_speed_and_the_expected_new_posts(), test_never_downloaded_uses_defaults_for_all_n_posts(), test_rate_limit_pauses_from_history_when_larger() (+3 more)
+### Community 13 - "Stats Merge & Estimate Tests"
+Cohesion: 0.22
+Nodes (15): _clean_stats(), empty_stats(), merge_stats(), change(), settings(), test_all_posts_counts_whats_missing_from_disk(), test_all_posts_without_a_post_count_uses_the_posts_seen(), test_format_duration() (+7 more)
 
-### Community 13 - "Entry Point (main-program)"
+### Community 14 - "README Usage Docs"
+Cohesion: 0.19
+Nodes (12): --run and igdl exit codes, Architecture flowchart (mermaid), Batch tab, Command line (--run, --check, --list, --add, --remove), Captions and hashtag Tags (EXIF XPKeywords), igdl single-profile CLI, igdl exit codes table, InstaKeep: Save it or lose it (README) (+4 more)
+
+### Community 15 - "Security Tests"
 Cohesion: 0.20
-Nodes (5): _headless_say(), main(), parse_args(), run(), _write_log_line()
+Nodes (3): test_is_valid_username(), test_parse_post_url(), test_parse_post_url_rejects_other_text()
 
-### Community 14 - "Hashtag Tags (EXIF)"
-Cohesion: 0.26
-Nodes (5): _decode_xp(), _encode_xp(), read_tags(), tag_post_images(), write_tags()
+### Community 16 - "Test Fixtures"
+Cohesion: 0.20
+Nodes (5): app_files_in_tmp(), Dialogs, dialogs(), fake(), hidden_windows()
 
 ## Knowledge Gaps
-- **7 isolated node(s):** `instakeep`, `Store._mutate Atomic Re-read/Write`, `Absolute Paths in instakeep/paths.py`, `igdl.__version__ Synced with pyproject.toml`, `File Naming <username>_YYYY-MM-DD_HH-MM-SS_<shortcode>` (+2 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 196 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **8 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **11 isolated node(s):** `instakeep`, `CI test workflow (Windows/Linux/macOS, Py 3.10 & 3.14)`, `igdl.__version__ synced with pyproject.toml`, `--run and igdl exit codes`, `igdl exit codes table` (+6 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 252 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **7 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Store` connect `Store & Usernames` to `Window (gui.py App)`, `Test Fixtures (conftest)`, `Security Helpers`, `Headless Run & Stats`, `Entry Point (main-program)`?**
-  _High betweenness centrality (0.111) - this node is a cross-community bridge._
-- **Are the 16 inferred relationships involving `Store` (e.g. with `main()` and `App`) actually correct?**
-  _`Store` has 16 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `instakeep`, `Store._mutate Atomic Re-read/Write`, `Absolute Paths in instakeep/paths.py` to the rest of the system?**
-  _7 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `Store & Usernames` be split into smaller, more focused modules?**
-  _Cohesion score 0.054244306418219465 - nodes in this community are weakly interconnected._
-- **Why does `App` connect `Window (gui.py App)` to `Store & Usernames`, `Security Helpers`, `Test Fixtures (conftest)`, `Run Lock & Worker`?**
-  _High betweenness centrality (0.102) - this node is a cross-community bridge._
-- **Are the 4 inferred relationships involving `run_all()` (e.g. with `Store` and `.record_result()`) actually correct?**
-  _`run_all()` has 4 INFERRED edges - model-reasoned connections that need verification._
-- **Should `igdl CLI & Downloader` be split into smaller, more focused modules?**
-  _Cohesion score 0.05584415584415584 - nodes in this community are weakly interconnected._
+- **Why does `App` connect `Window App (gui.App)` to `Store & Username Validation`, `Screenshot Generator`, `Download Time Estimates`, `Shared State & Test Rules`?**
+  _High betweenness centrality (0.123) - this node is a cross-community bridge._
+- **Are the 3 inferred relationships involving `App` (e.g. with `InstaKeep Batch Tab Screenshot` and `Individual Tab Screenshot (InstaKeep window)`) actually correct?**
+  _`App` has 3 INFERRED edges - model-reasoned connections that need verification._
+- **What connects `instakeep`, `CI test workflow (Windows/Linux/macOS, Py 3.10 & 3.14)`, `igdl.__version__ synced with pyproject.toml` to the rest of the system?**
+  _11 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `Store & Username Validation` be split into smaller, more focused modules?**
+  _Cohesion score 0.05961538461538462 - nodes in this community are weakly interconnected._
+- **Why does `Store` connect `Store & Username Validation` to `Entry Script & Error Policy`, `Window App (gui.App)`, `Download Time Estimates`, `Shared State & Test Rules`, `Runner Tests`?**
+  _High betweenness centrality (0.118) - this node is a cross-community bridge._
+- **Are the 18 inferred relationships involving `Store` (e.g. with `stub_store()` and `main()`) actually correct?**
+  _`Store` has 18 INFERRED edges - model-reasoned connections that need verification._
+- **Should `Entry Script & Error Policy` be split into smaller, more focused modules?**
+  _Cohesion score 0.05245901639344262 - nodes in this community are weakly interconnected._

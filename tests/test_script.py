@@ -1,17 +1,17 @@
-"""main-program.py's run(): a short message for Ctrl+C, full tracebacks for bugs."""
+"""instakeep.py's run(): a short message for Ctrl+C, full tracebacks for bugs."""
 
 import importlib.util
 from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "main-program.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "instakeep.py"
 
 
 @pytest.fixture
 def program():
-    # The file name has a dash, so it can't be imported with a plain `import`.
-    spec = importlib.util.spec_from_file_location("main_program", SCRIPT)
+    # Loaded by path: a plain `import instakeep` gives the package in src/, not this script.
+    spec = importlib.util.spec_from_file_location("instakeep_script", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

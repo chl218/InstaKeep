@@ -35,7 +35,9 @@ def default_settings(output_dir: Path) -> dict:
 
 
 # Per-user download records, added up over every run. Each one is a number >= 0.
-# media_count and last_* are replaced by each run instead of added up.
+# media_count and last_* are replaced by each run instead of added up (a run
+# that didn't learn media_count keeps the old one), and longest_seconds keeps
+# the largest.
 STAT_FIELDS = {
     "runs": int,              # finished downloads (not counting failures)
     "seconds": float,         # total time, including pauses and posts already on disk
@@ -51,8 +53,10 @@ STAT_FIELDS = {
     "last_seconds": float,    # the most recent run
     "last_images": int,
     "last_videos": int,
+    "longest_seconds": float,  # the slowest run
 }
 _REPLACED_STATS = {"media_count", "last_seconds", "last_images", "last_videos"}
+_MAX_STATS = {"longest_seconds"}
 
 
 def empty_stats() -> dict:
@@ -67,15 +71,26 @@ def _clean_stats(raw: object) -> dict:
         value = saved.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
             stats[key] = kind(value)
+    # Records saved before longest_seconds existed still know their last run.
+    stats["longest_seconds"] = max(stats["longest_seconds"], stats["last_seconds"])
     return stats
 
 
 def merge_stats(old: dict, run: dict) -> dict:
-    """old + one run's numbers. Fields in _REPLACED_STATS take the run's value."""
+    """old + one run's numbers. Fields in _REPLACED_STATS take the run's value,
+    fields in _MAX_STATS the larger of the two."""
     merged = dict(old)
     for key, value in run.items():
-        if key in STAT_FIELDS:
-            merged[key] = value if key in _REPLACED_STATS else merged.get(key, 0) + value
+        if key not in STAT_FIELDS:
+            continue
+        if key == "media_count" and not value:
+            continue  # unknown this run: keep what an earlier run found
+        if key in _REPLACED_STATS:
+            merged[key] = value
+        elif key in _MAX_STATS:
+            merged[key] = max(merged.get(key, 0), value)
+        else:
+            merged[key] = merged.get(key, 0) + value
     return _clean_stats(merged)
 
 

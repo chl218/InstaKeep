@@ -44,8 +44,11 @@ ROW_PADDING = 12   # pixels above and below the text in a table row
 # measured in the real font so it scales with the screen), and alignment.
 COLUMNS = {
     "user": ("Username", "a_long_instagram_name", "w"),
-    "last": ("Last downloaded", "2026-12-31 23:59  stopped, 999 new", "w"),
+    "last": ("Last download", "2026-12-31 23:59", "w"),
+    "result": ("Result", "rate-limited", "w"),
+    "count": ("Downloaded", "999999", "e"),
     "time": ("Time", "59 min 59 s", "e"),
+    "longest": ("Longest", "99 h 59 min", "e"),
     "total": ("Total time", "999 h 59 min", "e"),
     "images": ("Images", "999999", "e"),
     "videos": ("Videos", "999999", "e"),
@@ -56,14 +59,21 @@ MIN_HEIGHT = 700
 
 
 def format_last(user: dict) -> str:
-    """'2026-11-02 08:00  ok, 3 new' for the 'Last downloaded' column."""
+    """'2026-11-02 08:00' for the 'Last download' column."""
     if not user.get("last_run"):
         return "never"
     try:
-        when = datetime.fromisoformat(user["last_run"]).strftime("%Y-%m-%d %H:%M")
+        return datetime.fromisoformat(user["last_run"]).strftime("%Y-%m-%d %H:%M")
     except ValueError:
-        when = user["last_run"]
-    return f"{when}  {user.get('last_status') or ''}".strip()
+        return user["last_run"]
+
+
+def format_result(user: dict) -> str:
+    """'ok', 'stopped', 'not found'... for the 'Result' column.
+
+    The saved status also has the count ('ok, 3 new'); that has its own column.
+    """
+    return (user.get("last_status") or "").split(",")[0].strip()
 
 
 def format_estimate(label: str, users: list[dict], settings: dict) -> str:
@@ -71,6 +81,8 @@ def format_estimate(label: str, users: list[dict], settings: dict) -> str:
     if not users:
         return f"{label}: nothing to download."
     est = estimate(users, settings)
+    if not est.users:
+        return f"{label}: no estimate yet, none of them has been downloaded before."
     text = (f"{label}: about {format_duration(est.total_seconds)} "
             f"({format_duration(est.download_seconds)} downloading"
             f" + {format_duration(est.pause_seconds)} rate-limit pauses)")
@@ -78,6 +90,8 @@ def format_estimate(label: str, users: list[dict], settings: dict) -> str:
         text += f", up to {format_duration(est.worst_seconds)} if every post is new"
     if est.unknown:
         text += f". Post count not known yet for {len(est.unknown)} user(s)"
+    if est.no_data:
+        text += f". Not counted: {len(est.no_data)} user(s) never downloaded"
     return text + "."
 
 
@@ -183,8 +197,9 @@ class App:
 
     def _build_batch_tab(self, main: ttk.Frame, pad: dict) -> None:
         """The saved users: table, add/remove, how many posts, estimate, run buttons."""
-        # User table. "Time" ticks while a user downloads, then shows that run's time;
-        # the other columns add up every download of that user.
+        # User table. Last download, Result, Downloaded and Time describe the latest
+        # run ("Time" ticks while a user downloads). Longest is the slowest run;
+        # Total time, Images and Videos add up every download of that user.
         table = ttk.Frame(main)
         table.grid(row=0, column=0, sticky="nsew", **pad)
         table.columnconfigure(0, weight=1)
@@ -197,7 +212,7 @@ class App:
         self.tree = ttk.Treeview(table, columns=tuple(COLUMNS), show="headings", height=8)
         for key, (heading, _sample, anchor) in COLUMNS.items():
             self.tree.heading(key, text=heading)
-            self.tree.column(key, anchor=anchor, stretch=key in ("user", "last"))
+            self.tree.column(key, anchor=anchor, stretch=key in ("user", "result"))
         self.tree.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")
@@ -237,7 +252,7 @@ class App:
             ttk.Label(est, textvariable=self.estimate_all, justify="left"),
             ttk.Label(est, textvariable=self.estimate_selected, justify="left"),
             ttk.Label(est, foreground="gray", justify="left", text=(
-                f"Based on each user's earlier downloads (typical values until the first one). "
+                f"Based on each user's earlier downloads (users never downloaded are left out). "
                 f"Pauses: instaloader allows about {QUERY_LIMIT} Instagram requests per "
                 f"{QUERY_WINDOW // 60} minutes, and Instagram may block for longer.")),
         ]
@@ -281,9 +296,12 @@ class App:
         self.tree.delete(*self.tree.get_children())
         for user in self.store.users:
             name, st = user["username"], user["stats"]
-            last_time = format_duration(st["last_seconds"]) if user.get("last_run") else ""
+            ran = bool(user.get("last_run"))
             self.tree.insert("", "end", iid=name, values=(
-                name, format_last(user), last_time,
+                name, format_last(user), format_result(user),
+                st["last_images"] + st["last_videos"] if ran else "",
+                format_duration(st["last_seconds"]) if ran else "",
+                format_duration(st["longest_seconds"]) if st["longest_seconds"] else "",
                 format_duration(st["seconds"]) if st["seconds"] else "",
                 st["images"], st["videos"],
             ))

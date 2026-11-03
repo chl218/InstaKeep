@@ -2,8 +2,10 @@
 
 Each user's records (store.STAT_FIELDS) say how long their images and videos
 took, how many files a post has, how many Instagram requests a post needs and
-how much time went to rate-limit pauses. A user who was never downloaded uses
-the DEFAULT_* values instead.
+how much time went to rate-limit pauses. A user with no finished download yet
+has nothing to go on, so they are left out of the estimate (Estimate.no_data).
+The DEFAULT_* values fill in what a user's records don't say yet, such as the
+speed of videos for a user who has only had images downloaded.
 
 Rate limit: instaloader allows about QUERY_LIMIT requests per QUERY_WINDOW
 seconds and pauses once it reaches that. One run shares one loader across all
@@ -23,7 +25,7 @@ QUERY_WINDOW = 660            # seconds
 POSTS_PER_PAGE = 12           # posts Instagram returns per request when listing a profile
 MAX_PINNED = 3                # with a limit, igdl reads this many extra posts
 
-# Used until a user has records of their own.
+# Used where a user's records don't say yet.
 DEFAULT_IMAGE_SECONDS = 1.5   # per image file
 DEFAULT_VIDEO_SECONDS = 8.0   # per video file
 DEFAULT_FILES_PER_POST = 1.5  # carousels have several files
@@ -41,7 +43,7 @@ class UserEstimate:
     checked_posts: float  # posts looked at, including ones already on disk
     seconds: float        # time downloading, without rate-limit pauses
     queries: float        # Instagram requests
-    known: bool = True    # False: post count unknown (all posts, never downloaded)
+    known: bool = True    # False: post count unknown (all posts, profile size not recorded)
 
 
 @dataclass
@@ -51,6 +53,7 @@ class Estimate:
     pause_seconds: float = 0.0
     worst_seconds: float = 0.0     # if every post in range is new (same as total for all posts)
     runs_used: int = 0             # past downloads the estimate is based on
+    no_data: list[str] = field(default_factory=list)  # never downloaded: left out
 
     @property
     def total_seconds(self) -> float:
@@ -99,10 +102,22 @@ def _expected_new_posts(stats: dict, limit: int | None, worst: bool) -> tuple[fl
             return float(limit), checked, True
         return min(float(limit), since_last), checked, True
     # All posts: everything not on disk yet, plus what's new since the last download.
-    if not stats["media_count"]:
+    profile_posts = _profile_posts(stats)
+    if not profile_posts:
         return 0.0, 0.0, False
-    missing = max(0.0, stats["media_count"] - stats["new_posts"])
-    return missing + since_last, float(stats["media_count"]), True
+    missing = max(0.0, profile_posts - stats["new_posts"])
+    return missing + since_last, profile_posts, True
+
+
+def _profile_posts(stats: dict) -> float:
+    """The profile's post count. Without a login Instagram doesn't say, and a run
+    over all posts that hasn't finished yet doesn't know it either. Then assume
+    at least as many posts as earlier downloads saw (0 if never downloaded)."""
+    if stats["media_count"]:
+        return float(stats["media_count"])
+    if not stats["runs"]:
+        return 0.0
+    return max(float(stats["new_posts"]), stats["posts"] / stats["runs"])
 
 
 def estimate_user(username: str, stats: dict, settings: dict, worst: bool = False) -> UserEstimate:
@@ -131,9 +146,14 @@ def pause_seconds(queries: float, history: list[dict]) -> float:
 
 
 def estimate(users: list[dict], settings: dict) -> Estimate:
-    """Estimate a run over `users` (store user entries) with these settings."""
+    """Estimate a run over `users` (store user entries) with these settings.
+
+    Users without a finished download are left out and listed in `no_data`.
+    """
+    no_data = [u["username"] for u in users if not u["stats"]["runs"]]
+    users = [u for u in users if u["stats"]["runs"]]
     history = [u["stats"] for u in users]
-    result = Estimate(runs_used=sum(s["runs"] for s in history))
+    result = Estimate(runs_used=sum(s["runs"] for s in history), no_data=no_data)
     worst_download = 0.0
     worst_queries = 0.0
     for user in users:

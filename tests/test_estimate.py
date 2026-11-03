@@ -20,14 +20,20 @@ def test_format_duration(seconds, text):
     assert est.format_duration(seconds) == text
 
 
-def test_never_downloaded_uses_defaults_for_all_n_posts():
-    e = est.estimate([user()], settings(limit=4))
-    u = e.users[0]
+def test_users_never_downloaded_are_left_out():
+    seen = user("seen", runs=1, seconds=10, posts=4, new_posts=1, images=1, image_seconds=1,
+                queries=1, last_images=1)
+    e = est.estimate([user("new"), seen], settings(limit=4))
+    assert [u.username for u in e.users] == ["seen"] and e.no_data == ["new"]
+    assert e.download_seconds == pytest.approx(e.users[0].seconds)
+
+
+def test_without_history_estimate_user_uses_defaults_for_all_n_posts():
+    u = est.estimate_user("u", user()["stats"], settings(limit=4))
     assert u.new_posts == 4 and u.known
     expected = (est.USER_SECONDS + (4 + est.MAX_PINNED) * est.DEFAULT_CHECK_SECONDS
                 + 4 * est.DEFAULT_FILES_PER_POST * est.DEFAULT_IMAGE_SECONDS)
     assert u.seconds == pytest.approx(expected)
-    assert e.pause_seconds == 0  # a handful of requests is far below the limit
 
 
 def test_history_sets_the_speed_and_the_expected_new_posts():
@@ -51,9 +57,15 @@ def test_videos_use_their_own_speed():
     assert with_videos.seconds > without.seconds
 
 
-def test_all_posts_unknown_until_first_download():
-    e = est.estimate([user()], settings(all_posts=True))
-    assert e.unknown == ["u"] and e.download_seconds == 0
+def test_all_posts_without_a_post_count_uses_the_posts_seen():
+    # Instagram gives no post count without a login: media_count stays 0.
+    u = user(runs=1, seconds=60, posts=12, new_posts=10, images=20, image_seconds=30,
+             last_images=20)
+    e = est.estimate([u], settings(all_posts=True))
+    one = e.users[0]
+    assert not e.unknown and e.download_seconds > 0
+    assert one.checked_posts == 12
+    assert one.new_posts == pytest.approx(2 + 10)  # 2 not on disk + 10 new since last
 
 
 def test_all_posts_counts_whats_missing_from_disk():

@@ -1,6 +1,6 @@
 """Download the newest posts of every saved user, one user at a time.
 
-Used by both the window (on a background thread) and `main-program.py --run`
+Used by both the window (on a background thread) and `instakeep.py --run`
 (no window). Downloading itself is igdl's job: this module only loops over the
 users, keeps going when one user fails, records results, and makes sure two
 downloads never run at once (RunLock).
@@ -23,7 +23,7 @@ from . import paths
 from .estimate import format_duration
 from .store import Store
 
-# Exit codes of `main-program.py --run`, documented in the README.
+# Exit codes of `instakeep.py --run`, documented in the README.
 EXIT_OK = 0
 EXIT_SOME_FAILED = 1
 EXIT_RATE_LIMIT = cli.EXIT_RATE_LIMIT  # 4, the same code igdl uses
@@ -220,7 +220,7 @@ def run_all(
         if result.ok:
             log(f"@{name}: {result.new_files} new file(s) "
                 f"({stats.images} image(s), {stats.videos} video(s)) in {format_duration(result.seconds)}")
-        store.record_result(name, result.status, run_stats=_run_stats(stats, result))
+        store.record_result(name, result.status, run_stats=_run_stats(stats, result, limit))
         results.append(result)
         if on_user_done:
             on_user_done(result)
@@ -231,12 +231,21 @@ def run_all(
     return results
 
 
-def _run_stats(stats: downloader.DownloadStats, result: UserResult) -> dict:
+def _run_stats(stats: downloader.DownloadStats, result: UserResult,
+               limit: int | None) -> dict:
     """One run's numbers in the store's STAT_FIELDS form.
 
     Time and files from a failed or stopped run still count towards the totals,
     but only finished runs count as runs (estimates average per run).
+
+    Without a login Instagram doesn't give the profile's post count. A finished
+    run over all posts (limit None) looked at every post, so that number is used
+    instead (with videos off it counts image posts only, which is what such a
+    run downloads).
     """
+    media_count = stats.media_count or 0
+    if not media_count and limit is None and result.ok:
+        media_count = stats.posts
     return {
         "runs": int(result.ok),
         "seconds": result.seconds,
@@ -248,10 +257,11 @@ def _run_stats(stats: downloader.DownloadStats, result: UserResult) -> dict:
         "videos": stats.videos,
         "video_seconds": stats.video_seconds,
         "queries": stats.queries,
-        "media_count": stats.media_count or 0,
+        "media_count": media_count,
         "last_seconds": result.seconds,
         "last_images": stats.images,
         "last_videos": stats.videos,
+        "longest_seconds": result.seconds,
     }
 
 
@@ -293,7 +303,7 @@ def make_logger(file) -> Callable[[str], None]:
 
 
 def run_headless(store: Store) -> int:
-    """A run without a window (main-program.py --run): results in logs/run-YYYY-MM-DD.log."""
+    """A run without a window (instakeep.py --run): results in logs/run-YYYY-MM-DD.log."""
     with open_log() as f:
         log = make_logger(f)
         lock = RunLock(paths.LOCK_FILE)

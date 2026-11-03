@@ -151,6 +151,18 @@ def test_each_user_is_timed_and_recorded(store, tmp_path):
     assert st["image_seconds"] == 3 and st["media_count"] == 9 and st["last_images"] == 2
 
 
+def test_all_posts_run_records_the_posts_it_saw_as_the_profile_size(store, tmp_path):
+    # Without a login Instagram gives no post count (media_count stays None).
+    store.update_settings(all_posts=True)
+
+    def download_user(loader, name, limit, log, should_stop, tags, stats):
+        stats.posts = 7
+
+    runner.run_all(store, log=lambda _m: None, build_loader=lambda *a, **k: FakeLoader(),
+                   download_user=download_user, describe_error=describe, only=["alpha"])
+    assert store.users[0]["stats"]["media_count"] == 7
+
+
 def test_failed_user_counts_time_but_not_a_run(store, tmp_path):
     run(store, tmp_path, {"alpha": NotFound()}, only=["alpha"])
     assert store.users[0]["stats"]["runs"] == 0

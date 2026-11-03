@@ -2,10 +2,10 @@
 """InstaKeep: download the newest posts of a saved list of Instagram users.
 
 Run it from anywhere:
-    python main-program.py              open the window
-    python main-program.py --run        download for every saved user, no window
-    python main-program.py --check      show the setup status
-    python main-program.py --list | --add NAME | --remove NAME
+    python instakeep.py              open the window
+    python instakeep.py --run        download for every saved user, no window
+    python instakeep.py --check      show the setup status
+    python instakeep.py --list | --add NAME | --remove NAME
 
 On first start it checks its setup and, after asking, creates .venv and installs
 InstaKeep's dependencies (instaloader, piexif) into it. Only the standard library is used before that.
@@ -30,7 +30,7 @@ from instakeep import __version__, bootstrap, paths  # noqa: E402
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """The command-line options. With none, the window opens."""
     p = argparse.ArgumentParser(
-        prog="main-program.py",
+        prog="instakeep.py",
         description="Download the newest posts of a saved list of Instagram users.",
     )
     mode = p.add_mutually_exclusive_group()

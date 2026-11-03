@@ -17,7 +17,7 @@ How Python is written in this repo. The architecture and commands are in the roo
 
 - Map known failures to `(exit_code, message)` in one place: `igdl.cli.describe_error()`. Reuse it rather than writing a new mapping. Exit codes are documented in the README, so don't renumber them.
 - Catch broad exceptions only at a boundary where the failure must still reach the user: the GUI worker and Tk callbacks, the `--run` loop, the per-user loop. Mark them `# noqa: BLE001 - <reason>`. Everywhere else, let unexpected errors raise.
-- Keep tracebacks for unexpected errors. In the terminal, let them propagate (`igdl`, `main-program.py`). Where there's no terminal to show them (the window, `--run`), log `igdl.security.describe_unexpected(e)`, which is a summary line plus the traceback, and show only its first line in a dialog.
+- Keep tracebacks for unexpected errors. In the terminal, let them propagate (`igdl`, `instakeep.py`). Where there's no terminal to show them (the window, `--run`), log `igdl.security.describe_unexpected(e)`, which is a summary line plus the traceback, and show only its first line in a dialog.
 - Every `noqa` carries a reason (`# noqa: S606 - opens Explorer on a local folder`).
 - One user failing never stops the others. A rate-limit or connection error stops the whole run, because the remaining users would be blocked too.
 
@@ -43,7 +43,7 @@ Usernames, captions and error text from Instagram are untrusted.
 
 ## Startup constraint
 
-`igdl/security.py`, `instakeep/__init__.py`, `paths.py` and `bootstrap.py` run before the dependencies are known to be installed. In those files, use the standard library only: no instaloader, no piexif, and no other `igdl` module. `main-program.py` imports everything else only after `ensure_ready()` succeeds.
+`igdl/security.py`, `instakeep/__init__.py`, `paths.py` and `bootstrap.py` run before the dependencies are known to be installed. In those files, use the standard library only: no instaloader, no piexif, and no other `igdl` module. `instakeep.py` imports everything else only after `ensure_ready()` succeeds.
 
 ## Tests
 
