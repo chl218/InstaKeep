@@ -504,3 +504,49 @@ def test_single_post_uses_the_saved_folder(tmp_path, monkeypatch):
     result = downloader.download_single_post(loader, "DXwaXSSEuX8", log=lambda m: None,
                                              folder_for=lambda owner: "old_name")
     assert targets == ["old_name"] and result.owner == "new_name"
+
+
+# ------------------------------------------------------------- images option
+
+def test_images_on_by_default_and_can_be_turned_off(tmp_path):
+    loader = downloader.build_loader(tmp_path)
+    assert loader.download_pictures is True
+    only_videos = downloader.build_loader(tmp_path, videos=True, images=False)
+    assert only_videos.download_pictures is False and only_videos.download_videos is True
+    assert only_videos.download_video_thumbnails is False  # a cover image is a picture
+    with pytest.raises(ValueError):
+        downloader.build_loader(tmp_path, videos=False, images=False)
+
+
+def test_videos_only_skips_single_image_posts(tmp_path, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    feed = [SimpleNamespace(shortcode=c, date_utc=datetime(2026, 1, d), is_video=t == "GraphVideo", typename=t)
+            for c, d, t in (("img", 5, "GraphImage"), ("vid", 4, "GraphVideo"), ("car", 3, "GraphSidecar"),
+                            ("img2", 2, "GraphImage"), ("vid2", 1, "GraphVideo"))]
+    from types import SimpleNamespace as NS
+    profile = NS(username="u", is_private=False, mediacount=len(feed), get_posts=lambda: iter(feed))
+    monkeypatch.setattr(downloader.instaloader.Profile, "from_username", lambda ctx, name: profile)
+    loader = downloader.build_loader(tmp_path, videos=True, images=False, quiet=True)
+    saved = []
+    monkeypatch.setattr(loader, "download_post", lambda p, target: saved.append(p.shortcode))
+    assert downloader.download_user(loader, "u", limit=2, log=lambda m: None) == 2
+    assert saved == ["vid", "car"]  # the limit counts only posts that can hold videos
+
+
+def test_single_image_post_is_skipped_when_images_are_off(tmp_path, monkeypatch):
+    post = _fake_post(monkeypatch)
+    post.typename = "GraphImage"
+    loader = downloader.build_loader(tmp_path, videos=True, images=False, quiet=True)
+    monkeypatch.setattr(loader, "download_post", lambda p, target: pytest.fail("downloaded"))
+    logs = []
+    result = downloader.download_single_post(loader, "DXwaXSSEuX8", log=logs.append)
+    assert result.saved is False and "Tick Images" in logs[0]
+
+
+def test_cli_no_images_needs_videos():
+    assert cli.parse_args(["u", "--no-images", "--videos"]).images is False
+    assert cli.parse_args(["u"]).images is True
+    with pytest.raises(SystemExit):
+        cli.parse_args(["u", "--no-images"])

@@ -68,6 +68,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--videos", action="store_true",
         help="also download video posts and videos inside carousels (default: images only)",
     )
+    p.add_argument(
+        "--no-images", dest="images", action="store_false",
+        help="don't download photos (use with --videos to get only videos)",
+    )
     p.add_argument("--caption", action="store_true", help="save each caption as .txt")
     p.add_argument(
         "--no-tags", dest="tags", action="store_false",
@@ -86,6 +90,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """
     parser = build_parser()
     args = parser.parse_args(argv)
+    if not (args.images or args.videos):
+        parser.error("--no-images needs --videos, or there's nothing to download")
     # Accept "@Name" as well as "name", and reject anything that isn't a valid
     # Instagram username (e.g. "../evil") before it's used in a request or a folder name.
     try:
@@ -151,7 +157,8 @@ def main(argv: list[str] | None = None) -> int:
         # itself; -q hides that, so announce them on stderr (never hide a long wait).
         on_pause = (lambda secs: print(downloader.format_pause(secs), file=sys.stderr)) if args.quiet else None
         loader = downloader.build_loader(
-            args.output, videos=args.videos, caption=args.caption, metadata=args.metadata,
+            args.output, videos=args.videos, images=args.images, caption=args.caption,
+            metadata=args.metadata,
             quiet=args.quiet, on_pause=on_pause,
         )
         count = downloader.download_user(loader, args.username, args.limit, log=log, tags=args.tags)

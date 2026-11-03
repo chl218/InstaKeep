@@ -75,7 +75,7 @@ def _ratio(part: float, whole: float, default: float) -> float:
     return part / whole if whole > 0 else default
 
 
-def _seconds_per_post(stats: dict, videos: bool) -> float:
+def _seconds_per_post(stats: dict, videos: bool, images: bool = True) -> float:
     """Download time of one new post's files, from the user's records."""
     files = stats["images"] + stats["videos"]
     files_per_post = _ratio(files, stats["new_posts"], DEFAULT_FILES_PER_POST)
@@ -83,6 +83,8 @@ def _seconds_per_post(stats: dict, videos: bool) -> float:
     video_s = _ratio(stats["video_seconds"], stats["videos"], DEFAULT_VIDEO_SECONDS)
     if not videos:
         video_share = 0.0
+    elif not images:
+        video_share = 1.0  # only the videos are downloaded
     elif stats["videos"]:
         video_share = stats["videos"] / files
     else:
@@ -141,7 +143,7 @@ def estimate_user(username: str, stats: dict, settings: dict, worst: bool = Fals
     limit = None if settings["all_posts"] else settings["limit"]
     new, checked, known = _expected_new_posts(stats, limit, worst, full_scan_done)
     seconds = (USER_SECONDS + checked * _check_seconds(stats)
-               + new * _seconds_per_post(stats, settings["videos"]))
+               + new * _seconds_per_post(stats, settings["videos"], settings.get("images", True)))
     queries_per_post = _ratio(stats["queries"], stats["posts"], DEFAULT_QUERIES_PER_POST)
     queries = USER_QUERIES + checked * queries_per_post
     return UserEstimate(username, new, checked, seconds if known else 0.0, queries, known)

@@ -28,11 +28,12 @@ DEFAULT_LIMIT = 5
 # The data version this code reads and writes. Files from before versions
 # existed count as 1. Bump it whenever the file's layout changes, and add a
 # step to MIGRATIONS if old data needs more than _clean()'s defaults.
-STORE_VERSION = 2
+STORE_VERSION = 3
 
 # version -> a function that upgrades raw file data from that version to the
 # next, in place. 1 -> 2 only added per-user fields (userid, folder,
-# full_scan_done, last_ok), which _clean() fills in with defaults.
+# full_scan_done, last_ok), and 2 -> 3 the "images" setting; _clean() fills
+# both in with defaults.
 MIGRATIONS: dict[int, Callable[[dict], None]] = {}
 
 
@@ -53,6 +54,7 @@ def default_settings(output_dir: Path) -> dict:
         "limit": DEFAULT_LIMIT,
         "all_posts": False,  # True: every post, and "limit" is ignored
         "output_dir": str(output_dir),
+        "images": True,    # False: no photos (with videos on: only videos)
         "videos": False,
         "caption": False,
         "tags": True,      # caption #hashtags -> image Tags

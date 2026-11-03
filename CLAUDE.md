@@ -13,7 +13,7 @@ python instakeep.py                      # window. First start offers to create 
 python instakeep.py --run                # download for every saved user, no window (logs to logs/run-YYYY-MM-DD.log)
 python instakeep.py --check              # setup status
 python instakeep.py --list | --add NAME... | --remove NAME...
-.venv\Scripts\igdl USERNAME [--limit N] [--videos] [--caption] [--metadata]   # one-off single profile
+.venv\Scripts\igdl USERNAME [--limit N] [--videos] [--no-images] [--caption] [--metadata]   # one-off single profile
 
 .venv\Scripts\pip install -e .[dev]         # deps + pytest
 .venv\Scripts\python -m pytest              # all tests (pythonpath=src is set in pyproject.toml)
@@ -46,6 +46,7 @@ Constraints that span several files:
   - A rate-limit error (exit code 4) ends the whole run.
   - A full run goes in `run_order()`: least recent `last_ok` first. A "not found" user with a saved `userid` is looked up and renamed in the list (`_follow_rename`).
   - It takes injectable `build_loader` / `download_user` / `describe_error`; `tests/test_runner.py` passes fakes through these.
+- **No sleep while downloading.** `awake.keep_awake()` wraps every download (window `_run`/`_run_post`, `run_headless`), inside the `RunLock`. On Windows the request belongs to the calling thread, so it's entered on the downloading thread. It only holds off sleep, never the screen.
 - **GUI threading.** Downloads run on a worker thread that never touches widgets. It posts tuples (`"log"`, `"pause"`, `"user_done"`, `"done"`) to `App.messages`, which `_poll_messages()` drains on the Tk thread every 100 ms. Keep tkinter variables out of the worker; read them into plain values first.
 - **Untrusted input.**
   - Every username goes through `igdl.security.is_valid_username` before it's used as a request or folder name. The saved list stores names lowercase (`store.normalize_username`).

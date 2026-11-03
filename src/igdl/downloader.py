@@ -109,6 +109,7 @@ def build_loader(
     output_dir: Path,
     videos: bool = False,
     caption: bool = False,
+    images: bool = True,
     metadata: bool = False,
     quiet: bool = False,
     on_pause: Callable[[float], None] | None = None,
@@ -118,6 +119,9 @@ def build_loader(
 
     videos=False (default): only photos. Video posts are skipped by download_user,
         and video slides inside carousels are skipped here.
+    images=False: no photos. Image posts are skipped by download_user, and image
+        slides inside carousels (and video cover images) are skipped here.
+        At least one of images and videos must be on (ValueError otherwise).
     caption=True: save <name>.txt with the caption. (Hashtag Tags are a separate
         option: download_user's `tags`.)
     metadata=True: save <name>.json with the post's full data.
@@ -127,16 +131,20 @@ def build_loader(
     own message about the pause. should_stop() is checked during pauses; if it
     returns True, the pause ends with DownloadStopped.
     """
+    if not (images or videos):
+        raise ValueError("nothing to download: turn on images or videos")
     loader = instaloader.Instaloader(
         # Always our controller, so requests and pauses are counted for DownloadStats.
         rate_controller=lambda ctx: _PauseAwareRateController(ctx, on_pause, should_stop),
         # instaloader fills {target} with the folder name passed to download_post().
         dirname_pattern=str(Path(output_dir) / DIRNAME_PATTERN),
         filename_pattern=FILENAME_PATTERN,
+        download_pictures=images,
         # Turning off both video files and video thumbnails makes instaloader skip
         # video slides in carousels entirely, instead of saving their cover image.
+        # A cover image is a picture, so it's also skipped with images off.
         download_videos=videos,
-        download_video_thumbnails=videos,
+        download_video_thumbnails=videos and images,
         download_geotags=False,   # would need an extra request per post
         download_comments=False,  # would need many extra requests per post
         save_metadata=metadata,   # <name>.json with the post's full data
@@ -288,6 +296,7 @@ def download_user(
 
         # Settings chosen in build_loader.
         include_videos = loader.download_videos
+        include_images = loader.download_pictures
         # The folder name becomes part of a path: same check as a username.
         target = (folder_name or profile.username).lower()
         if not is_valid_username(target):
@@ -302,11 +311,14 @@ def download_user(
         known = profile.mediacount
         if limit is not None:
             total = str(limit) if known is None else str(min(limit, known))
-        elif include_videos and known is not None:
+        elif include_videos and include_images and known is not None:
             total = str(known)
         else:
             total = "?"  # unknown until we've seen which posts are videos
-        kind = "post(s)" if include_videos else "image post(s)"
+        if include_videos and include_images:
+            kind = "post(s)"
+        else:
+            kind = "image post(s)" if include_images else "video and carousel post(s)"
         log(f"Downloading {total} {kind} from @{profile.username}")
 
         # Build the list of posts lazily. get_posts() fetches pages of ~12 posts from
@@ -315,6 +327,10 @@ def download_user(
         if not include_videos:
             # Images-only: drop video and reel posts before --limit counts anything.
             posts = (p for p in posts if not p.is_video)
+        if not include_images:
+            # Videos-only: drop single-image posts. Carousels stay, since they can
+            # hold videos; their image slides are skipped by the loader.
+            posts = (p for p in posts if getattr(p, "typename", None) != "GraphImage")
         if limit is not None:
             # Up to MAX_PINNED pinned posts come first regardless of date. Read that many
             # extra posts, then keep the newest `limit` by date.
@@ -406,6 +422,9 @@ def download_single_post(
 
     if post.is_video and not loader.download_videos:
         log(f"@{owner} {shortcode} is a video post. Tick Videos to download it.")
+        return PostResult(owner, saved=False)
+    if getattr(post, "typename", None) == "GraphImage" and not loader.download_pictures:
+        log(f"@{owner} {shortcode} is an image post. Tick Images to download it.")
         return PostResult(owner, saved=False)
 
     log(f"Downloading {shortcode} ({post.date_utc:%Y-%m-%d}) from @{owner}")

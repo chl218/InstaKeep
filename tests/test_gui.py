@@ -338,3 +338,38 @@ def test_drawing_the_grid_places_a_line_per_border(app, monkeypatch):
     boxes.pop("nasa")  # one row scrolled out of view: its lines are hidden, not left behind
     app._draw_grid()
     assert len([f for f in app.grid_frames if f.winfo_manager() == "place"]) == len(gui.COLUMNS) + 1
+
+
+def test_images_checkbox_is_on_by_default_and_saved(app, store):
+    assert app.images.get() is True
+    app.images.set(False)
+    assert store.settings["images"] is False
+
+
+def test_nothing_chosen_warns_instead_of_downloading(app, dialogs):
+    app.images.set(False)
+    app.videos.set(False)
+    app._start(None)
+    assert app.worker is None
+    assert dialogs.texts("showwarning") == [gui.NOTHING_CHOSEN]
+
+
+def test_window_download_keeps_the_computer_awake_while_it_runs(app, monkeypatch):
+    from instakeep import awake
+
+    events = []
+
+    class Recorder:
+        def __init__(self, log=None):
+            events.append("awake")
+
+        def __enter__(self):
+            return True
+
+        def __exit__(self, *exc):
+            events.append("sleep allowed")
+
+    monkeypatch.setattr(awake, "keep_awake", Recorder)
+    monkeypatch.setattr(runner, "run_all", lambda *a, **k: events.append("download") or [])
+    app._run(None)  # what the worker thread runs
+    assert events == ["awake", "download", "sleep allowed"]

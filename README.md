@@ -39,7 +39,7 @@ Files go to `InstaKeep/downloads/<username>/` unless you pick another folder. Ex
 | **Remove selected** (or Delete key) | Removes users from the list. Downloaded files are kept. |
 | **Full re-scan selected** | Makes the next Download all posts run of those users look at every post again, to fill gaps (see below). It doesn't start a download. |
 | Download all posts / Newest _N_ posts per user | Newest 5 by default. Tick Download all posts to get every post; the Newest box is greyed out while it's ticked. Both are also used by `--run`. |
-| Videos / Caption (.txt) / #tags / Metadata | #tags starts on and the others start off. See [Captions and hashtag Tags](#captions-and-hashtag-tags). |
+| Images / Videos / Caption (.txt) / #tags / Metadata | Images and #tags start on and the others start off. Untick Images and tick Videos to get only videos (single-image posts are skipped; carousels keep just their videos). At least one of Images and Videos must be on. See [Captions and hashtag Tags](#captions-and-hashtag-tags). |
 | **Download all** / **Download selected** | Downloads for those users. **Stop** finishes the current post and then stops, and it also works during a rate-limit pause. |
 | **Open folder** | Opens the selected user's folder, or the output folder. |
 
@@ -56,7 +56,7 @@ If a saved user isn't found, InstaKeep looks up the account by its ID (saved aft
 Paste a post or reel link, such as `https://www.instagram.com/p/EXAMPLE_POST/` (anything after the code, like `?igsh=...`, is ignored), and press **Download post** or Enter. It uses one Instagram request for the post's details.
 
 - The post is saved in `downloads/<account>/` with the same file names Batch uses, so a later Batch download of that account skips it.
-- Videos, Caption, #tags and Metadata apply as they do in Batch. With Videos off, a video post is skipped and the log says so.
+- Images, Videos, Caption, #tags and Metadata apply as they do in Batch. With Videos off, a video post is skipped and the log says so; with Images off, so is a single-image post.
 - Tick **Also add the post's account to the saved list** to add its account to the Batch list once the post has loaded.
 - **Open folder** on this tab opens the folder of the last post's account.
 - Only public accounts work. A deleted post and a private account's post both show "couldn't be loaded".
@@ -79,6 +79,8 @@ python instakeep.py --remove nasa
 python instakeep.py --rescan natgeo     # next "all posts" download looks at every post again
 ```
 
+While a download runs (in the window or with `--run`), InstaKeep asks the computer not to go to sleep, so a locked screen doesn't pause it. The screen can still turn off and lock. Once the download ends, sleep works as usual again. Closing a laptop lid or pressing the power button still puts it to sleep.
+
 `--run` appends to `logs/run-YYYY-MM-DD.log` and keeps the last 30 log files. A `--run` and the window never download at the same time; whichever starts second gives up and says so.
 
 Known problems (a profile that doesn't exist, a private profile, a rate limit) get one short line. Anything unexpected is a bug: you get its Python traceback, in the terminal, in the window's log, or in the `--run` log file.
@@ -99,10 +101,11 @@ Known problems (a profile that doesn't exist, a private profile, a rate limit) g
 `igdl` is installed into `.venv` with everything else. Activate the venv (`.venv\Scripts\activate`, or `source .venv/bin/activate` on macOS/Linux), then:
 
 ```powershell
-igdl USERNAME [-o DIR] [--limit N] [--videos] [--caption] [--no-tags] [--metadata] [-q]
+igdl USERNAME [-o DIR] [--limit N] [--videos] [--no-images] [--caption] [--no-tags] [--metadata] [-q]
 
 igdl natgeo --limit 10                # newest 10 image posts, hashtag Tags written -> InstaKeep/downloads/natgeo/
 igdl natgeo --limit 10 --videos       # newest 10 posts, videos included
+igdl natgeo --videos --no-images      # only videos
 igdl natgeo --caption                 # all image posts + caption .txt
 igdl natgeo --no-tags                 # all image posts, images left untouched
 igdl natgeo -o D:\ig --metadata       # all image posts + .json data -> D:\ig\natgeo\

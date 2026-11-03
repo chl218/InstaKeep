@@ -347,3 +347,20 @@ def test_fresh_lock_with_a_live_pid_is_respected(tmp_path):
     lock_file = tmp_path / "run.lock"
     lock_file.write_text(str(os.getpid()))
     assert not runner.RunLock(lock_file).acquire()
+
+
+def test_images_setting_passed_to_the_loader(store):
+    built = []
+    store.update_settings(images=False, videos=True)
+    runner.run_all(store, log=lambda _m: None,
+                   build_loader=lambda *a, **k: built.append(k) or FakeLoader(),
+                   download_user=recording_download([]), describe_error=describe, only=["alpha"])
+    assert built[0]["images"] is False and built[0]["videos"] is True
+
+
+def test_nothing_to_download_when_images_and_videos_are_off(store):
+    store.update_settings(images=False, videos=False)
+    calls, logs = [], []
+    results = run_with(store, recording_download(calls), log=logs.append)
+    assert results == [] and calls == []
+    assert any("Images and Videos are both off" in line for line in logs)

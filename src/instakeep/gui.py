@@ -36,7 +36,7 @@ from tkinter import font as tkfont
 from igdl import cli, downloader
 from igdl.security import describe_unexpected, parse_post_url, strip_control
 
-from . import paths, runner
+from . import awake, paths, runner
 from .estimate import QUERY_LIMIT, QUERY_WINDOW, estimate, format_duration
 from .store import NewerStoreError, Store
 
@@ -111,6 +111,7 @@ def sort_users(users: list[dict], column: str | None, descending: bool = False) 
     return sorted(users, key=SORT_KEYS[column], reverse=descending)
 TITLE = "InstaKeep"
 SELECT_FIRST = "Select one or more users in the list first."
+NOTHING_CHOSEN = "Tick Images or Videos (or both) under Download options: there's nothing to download."
 MIN_HEIGHT = 700
 
 
@@ -180,6 +181,7 @@ class App:
         self.new_user = tk.StringVar()
         self.limit = tk.StringVar(value=str(s["limit"]))
         self.all_posts = tk.BooleanVar(value=s["all_posts"])
+        self.images = tk.BooleanVar(value=s["images"])
         self.videos = tk.BooleanVar(value=s["videos"])
         self.caption = tk.BooleanVar(value=s["caption"])
         self.tags = tk.BooleanVar(value=s["tags"])
@@ -195,7 +197,7 @@ class App:
         self._refresh_states()
         self._refresh_table()
         # Save option changes as soon as they happen.
-        for var in (self.all_posts, self.videos, self.caption, self.tags, self.metadata):
+        for var in (self.all_posts, self.images, self.videos, self.caption, self.tags, self.metadata):
             var.trace_add("write", lambda *_: self._save_settings())
         self.limit.trace_add("write", lambda *_: self._save_settings())
         self.output_dir.trace_add("write", lambda *_: self._save_settings())
@@ -238,10 +240,11 @@ class App:
         opts.columnconfigure(1, weight=1)
         kinds = ttk.Frame(opts)
         kinds.grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Checkbutton(kinds, text="Videos", variable=self.videos).grid(row=0, column=0, padx=(0, 8))
-        ttk.Checkbutton(kinds, text="Caption (.txt)", variable=self.caption).grid(row=0, column=1, padx=(0, 8))
-        ttk.Checkbutton(kinds, text="#tags", variable=self.tags).grid(row=0, column=2, padx=(0, 8))
-        ttk.Checkbutton(kinds, text="Metadata", variable=self.metadata).grid(row=0, column=3)
+        ttk.Checkbutton(kinds, text="Images", variable=self.images).grid(row=0, column=0, padx=(0, 8))
+        ttk.Checkbutton(kinds, text="Videos", variable=self.videos).grid(row=0, column=1, padx=(0, 8))
+        ttk.Checkbutton(kinds, text="Caption (.txt)", variable=self.caption).grid(row=0, column=2, padx=(0, 8))
+        ttk.Checkbutton(kinds, text="#tags", variable=self.tags).grid(row=0, column=3, padx=(0, 8))
+        ttk.Checkbutton(kinds, text="Metadata", variable=self.metadata).grid(row=0, column=4)
         ttk.Label(opts, text="Output folder:").grid(row=1, column=0, sticky="w", pady=(6, 0))
         ttk.Entry(opts, textvariable=self.output_dir).grid(row=1, column=1, sticky="ew", padx=4, pady=(6, 0))
         ttk.Button(opts, text="Browse…", command=self._pick_output_dir).grid(row=1, column=2, pady=(6, 0))
@@ -544,7 +547,7 @@ class App:
     def _form_settings(self) -> dict:
         """The settings as the form shows them (half-typed values fall back to saved ones)."""
         s = self.store.settings
-        s.update(all_posts=self.all_posts.get(), videos=self.videos.get())
+        s.update(all_posts=self.all_posts.get(), images=self.images.get(), videos=self.videos.get())
         s["limit"] = self._read_limit() or s["limit"]
         return s
 
@@ -558,7 +561,8 @@ class App:
 
     def _save_settings(self) -> None:
         """Save the options. Runs on every change, so it skips half-typed values."""
-        values = {"all_posts": self.all_posts.get(), "videos": self.videos.get(),
+        values = {"all_posts": self.all_posts.get(), "images": self.images.get(),
+                  "videos": self.videos.get(),
                   "caption": self.caption.get(), "tags": self.tags.get(),
                   "metadata": self.metadata.get()}
         limit = self._read_limit()
@@ -595,6 +599,8 @@ class App:
         if not self.all_posts.get() and self._read_limit() is None:
             messagebox.showwarning(TITLE, "The number of posts must be 1 or more.", parent=self.root)
             return
+        if not self._media_chosen():
+            return
         if not self._store_writable():
             return
         self._launch(self._run, only)
@@ -609,7 +615,7 @@ class App:
             messagebox.showwarning(TITLE, str(e), parent=self.root)
             return
         self._save_settings()
-        if not self._store_writable():
+        if not self._media_chosen() or not self._store_writable():
             return
         # Plain values for the worker: it must not read tkinter variables.
         self._launch(self._run_post, shortcode, self.add_owner.get(), self.store.settings)
@@ -629,6 +635,13 @@ class App:
         for button in (self.all_button, self.sel_button, self.post_button):
             button.configure(state="disabled" if running else idle)
         self.stop_button.configure(state="normal" if running else "disabled")
+
+    def _media_chosen(self) -> bool:
+        """False (with a hint) if both Images and Videos are off: nothing to download."""
+        if self.images.get() or self.videos.get():
+            return True
+        messagebox.showwarning(TITLE, NOTHING_CHOSEN, parent=self.root)
+        return False
 
     def _store_writable(self) -> bool:
         """Re-read the data file. False (and the window locked) if a newer InstaKeep wrote it."""
@@ -670,15 +683,18 @@ class App:
                 put(("done", "Another download (another window or a --run) is in progress. "
                      "Try again later.", False))
                 return
-            results = runner.run_all(
-                self.store,
-                log=lambda text: put(("log", text)),
-                should_stop=self.stop_requested.is_set,
-                on_pause=lambda secs: put(("pause", secs)),
-                on_user_done=lambda r: put(("user_done", r)),
-                on_user_start=lambda name: put(("user_start", name)),
-                only=only,
-            )
+            # No sleep while downloading, even with the screen locked. Entered on
+            # this (the worker) thread, which Windows ties the request to.
+            with awake.keep_awake(log=lambda text: put(("log", text))):
+                results = runner.run_all(
+                    self.store,
+                    log=lambda text: put(("log", text)),
+                    should_stop=self.stop_requested.is_set,
+                    on_pause=lambda secs: put(("pause", secs)),
+                    on_user_done=lambda r: put(("user_done", r)),
+                    on_user_start=lambda name: put(("user_start", name)),
+                    only=only,
+                )
             ok = sum(r.ok for r in results)
             new = sum(r.new_files for r in results)
             put(("done", f"Done. {ok}/{len(results)} user(s) OK, {new} new file(s).", True))
@@ -703,16 +719,19 @@ class App:
                      "Try again later.", False))
                 return
             loader = build_loader(
-                Path(settings["output_dir"]), videos=settings["videos"], caption=settings["caption"],
+                Path(settings["output_dir"]), videos=settings["videos"], images=settings["images"],
+                caption=settings["caption"],
                 metadata=settings["metadata"], quiet=True,
                 on_pause=lambda secs: put(("pause", secs)), should_stop=self.stop_requested.is_set,
             )
             loader.context.error = lambda msg, repeat_at_end=True: log(f"warning: {msg}")
-            result = download_post(loader, shortcode, log=log, tags=settings["tags"],
-                                   folder_for=self.store.folder_of)
+            with awake.keep_awake(log=log):
+                result = download_post(loader, shortcode, log=log, tags=settings["tags"],
+                                       folder_for=self.store.folder_of)
             put(("post_owner", result.owner, add_owner))
             if not result.saved:
-                put(("done", "Nothing downloaded: the post is a video.", True))
+                kind = "an image" if settings["videos"] else "a video"
+                put(("done", f"Nothing downloaded: the post is {kind}.", True))
             else:
                 put(("done", f"Done. {result.new_files} new file(s) from @{result.owner}.", True))
         except downloader.DownloadStopped:

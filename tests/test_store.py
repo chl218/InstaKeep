@@ -267,3 +267,9 @@ def test_bad_new_fields_in_file_are_dropped(tmp_path):
         "last_ok": 5}]}), encoding="utf-8")
     user = Store(path, tmp_path).users[0]
     assert (user["folder"], user["userid"], user["full_scan_done"], user["last_ok"]) == (None, None, False, None)
+
+
+def test_images_on_by_default(store):
+    assert store.settings["images"] is True
+    store.update_settings(images=False)
+    assert store.settings["images"] is False

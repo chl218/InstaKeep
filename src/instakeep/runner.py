@@ -20,7 +20,7 @@ from typing import Callable
 from igdl import cli, downloader
 from igdl.security import describe_unexpected, strip_control
 
-from . import paths
+from . import awake, paths
 from .bootstrap import EXIT_SETUP
 from .estimate import format_duration
 from .store import NewerStoreError, Store, folder_name
@@ -228,10 +228,13 @@ def run_all(
     if not names:
         log("No users in the list.")
         return []
+    if not (s["images"] or s["videos"]):
+        log("Nothing to download: Images and Videos are both off. Turn one of them on.")
+        return []
 
     output = Path(s["output_dir"])
     loader = build_loader(
-        output, videos=s["videos"], caption=s["caption"], metadata=s["metadata"],
+        output, videos=s["videos"], images=s["images"], caption=s["caption"], metadata=s["metadata"],
         quiet=True, on_pause=on_pause, should_stop=should_stop,
     )
     # Send instaloader's non-fatal warnings to our log too. Every `log` used here
@@ -404,7 +407,9 @@ def run_headless(store: Store) -> int:
         with lock:
             log(f"Run started for {len(store.usernames())} user(s).")
             try:
-                results = run_all(store, log=log, on_pause=lambda secs: log(downloader.format_pause(secs)))
+                with awake.keep_awake(log=log):  # no sleep mid-run, even when locked
+                    results = run_all(store, log=log,
+                                      on_pause=lambda secs: log(downloader.format_pause(secs)))
             except NewerStoreError as e:
                 log(f"error: {e}")
                 return EXIT_SETUP
