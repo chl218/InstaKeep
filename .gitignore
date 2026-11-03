@@ -8,4 +8,4 @@ __pycache__/
 *.session
 session-*
 .env
-graphify*
+graphify-out
