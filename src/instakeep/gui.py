@@ -47,7 +47,7 @@ from igdl.security import (describe_unexpected, parse_entries, parse_post_url,
 from . import awake, paths, runner
 from .estimate import QUERY_LIMIT, QUERY_WINDOW, estimate, format_duration
 from . import preview
-from .store import NewerStoreError, Store
+from .store import NewerStoreError, Store, normalize_username
 
 POLL_MS = 100  # how often the window checks for messages from the download thread
 CELL_PADDING = 12  # pixels added to the longest text in a table column (both sides together)
@@ -270,23 +270,23 @@ class App:
         main.rowconfigure(0, weight=1)
         self.tabs = ttk.Notebook(top)
         self.tabs.grid(row=0, column=0, sticky="nsew", **pad)
-        self.preview_frame = ttk.LabelFrame(top, text="Latest image", padding=8)
+        self.preview_frame = ttk.LabelFrame(top, text="Latest Image", padding=8)
         self.preview_frame.grid(row=0, column=1, sticky="nsew", **pad)
         self._build_preview(self.preview_frame, line)
         batch = ttk.Frame(self.tabs, padding=4)
         batch.columnconfigure(0, weight=1)
-        self.tabs.add(batch, text="From user")
+        self.tabs.add(batch, text="From User")
         individual = ttk.Frame(self.tabs, padding=8)
         individual.columnconfigure(1, weight=1)
-        self.tabs.add(individual, text="From link")
+        self.tabs.add(individual, text="From Link")
         files = ttk.Frame(self.tabs, padding=8)
-        self.tabs.add(files, text="From file")
+        self.tabs.add(files, text="From File")
         self._build_batch_tab(batch, pad)
         self._build_individual_tab(individual)
         self._build_files_tab(files)
 
         # Download options shared by all tabs.
-        opts = ttk.LabelFrame(main, text="Download options", padding=8)
+        opts = ttk.LabelFrame(main, text="Download Options", padding=8)
         opts.grid(row=1, column=0, sticky="ew", **pad)
         opts.columnconfigure(1, weight=1)
         kinds = ttk.Frame(opts)
@@ -305,8 +305,8 @@ class App:
         buttons.columnconfigure(2, weight=1)
         self.stop_button = ttk.Button(buttons, text="Stop", command=self._stop, state="disabled")
         self.stop_button.grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(buttons, text="Open folder", command=self._open_folder).grid(row=0, column=1)
-        ttk.Checkbutton(buttons, text="Show preview", variable=self.show_preview,
+        ttk.Button(buttons, text="Open Folder", command=self._open_folder).grid(row=0, column=1)
+        ttk.Checkbutton(buttons, text="Show Preview", variable=self.show_preview,
                         command=self._toggle_preview).grid(row=0, column=2, sticky="e")
 
         # Log + status line.
@@ -330,7 +330,7 @@ class App:
         self.preview_label.grid(row=0, column=0, sticky="nsew")
         self.preview_caption = ttk.Label(frame, text="", wraplength=side, justify="left")
         self.preview_caption.grid(row=1, column=0, sticky="w", pady=(6, 0))
-        self.open_image_button = ttk.Button(frame, text="Open image", command=self._open_image,
+        self.open_image_button = ttk.Button(frame, text="Open Image", command=self._open_image,
                                             state="disabled")
         self.open_image_button.grid(row=2, column=0, sticky="w", pady=(6, 0))
         # Refit the image when the panel changes size (window resized).
@@ -369,6 +369,8 @@ class App:
         self.tree.bind("<B1-Motion>", lambda _e: self._schedule_grid(), add="+")
         self.tree.bind("<Delete>", lambda _e: self._remove_selected())
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self._refresh_estimate())
+        self.tree.bind("<Double-1>", self._edit_username)
+        self._editor: ttk.Entry | None = None
         main.rowconfigure(0, weight=1)
 
         # Add / remove.
@@ -465,18 +467,18 @@ class App:
 
         users_buttons = ttk.Frame(tab)
         users_buttons.grid(row=2, column=0, sticky="w", pady=(6, 0))
-        self.files_add_all_button = ttk.Button(users_buttons, text="Add all usernames",
+        self.files_add_all_button = ttk.Button(users_buttons, text="Add All Users",
                                                command=lambda: self._add_files_users(False))
         self.files_add_all_button.grid(row=0, column=0, padx=(0, 6))
-        self.files_add_sel_button = ttk.Button(users_buttons, text="Add selected",
+        self.files_add_sel_button = ttk.Button(users_buttons, text="Add Selected",
                                                command=lambda: self._add_files_users(True))
         self.files_add_sel_button.grid(row=0, column=1)
         links_buttons = ttk.Frame(tab)
         links_buttons.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
-        self.files_dl_all_button = ttk.Button(links_buttons, text="Download all links",
+        self.files_dl_all_button = ttk.Button(links_buttons, text="Download All Links",
                                               command=lambda: self._start_files_links(False))
         self.files_dl_all_button.grid(row=0, column=0, padx=(0, 6))
-        self.files_dl_sel_button = ttk.Button(links_buttons, text="Download selected",
+        self.files_dl_sel_button = ttk.Button(links_buttons, text="Download Selected",
                                               command=lambda: self._start_files_links(True))
         self.files_dl_sel_button.grid(row=0, column=1)
         ttk.Checkbutton(tab, text="Also add each link's account to the saved list (From user tab)",
@@ -606,6 +608,7 @@ class App:
 
     def _refresh_table(self) -> None:
         """Redraw the user table from the store, keeping the selection."""
+        self._close_editor()
         selected = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
         column, descending = self.sort or (None, False)
@@ -735,6 +738,54 @@ class App:
         self.new_user.set("")
         self._refresh_table()
         self.status.set("Added." if added else "Already in the list.")
+
+    def _close_editor(self) -> None:
+        """Remove the in-cell username editor, if open, without saving."""
+        if self._editor is not None:
+            editor, self._editor = self._editor, None
+            editor.destroy()
+
+    def _edit_username(self, event) -> None:
+        """Double-click a username cell to edit it in place (Enter saves, Esc cancels)."""
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            return
+        if self.tree.identify_column(event.x) != "#1":   # the username column
+            return
+        old = self.tree.identify_row(event.y)
+        if not old:
+            return
+        self._close_editor()
+        x, y, width, height = self.tree.bbox(old, "#1")
+        editor = ttk.Entry(self.tree)
+        editor.insert(0, old)
+        editor.select_range(0, "end")
+        editor.place(x=x, y=y, width=width, height=height)
+        editor.focus_set()
+        self._editor = editor
+        editor.bind("<Return>", lambda _e: self._commit_username(old, editor.get()))
+        editor.bind("<Escape>", lambda _e: self._close_editor())
+        editor.bind("<FocusOut>", lambda _e: self._close_editor())
+        return "break"
+
+    def _commit_username(self, old: str, text: str) -> None:
+        """Save the edited name: the list entry is renamed, its folder stays."""
+        try:
+            new = normalize_username(text)
+        except ValueError as e:
+            messagebox.showwarning(TITLE, str(e), parent=self.root)
+            return
+        if new == old:
+            self._close_editor()
+            return
+        try:
+            renamed = self.store.rename_user(old, new)
+        except NewerStoreError as e:
+            self._close_editor()
+            self._block_for_newer_store(str(e))
+            return
+        self._refresh_table()   # also closes the editor
+        self.status.set(f"Renamed @{old} to @{new}." if renamed
+                        else f"@{new} is already in the list.")
 
     def _selected_names(self) -> list[str]:
         """The selected usernames. Shows a hint and returns [] if none are selected."""
