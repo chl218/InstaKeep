@@ -550,3 +550,26 @@ def test_cli_no_images_needs_videos():
     assert cli.parse_args(["u"]).images is True
     with pytest.raises(SystemExit):
         cli.parse_args(["u", "--no-images"])
+
+
+def test_on_saved_reports_each_posts_new_files_in_slide_order(tmp_path, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    feed = [SimpleNamespace(shortcode=c, date_utc=datetime(2026, 1, d), is_video=False, caption="")
+            for c, d in (("new", 3), ("old", 2))]
+    loader, _ = _fake_feed(monkeypatch, tmp_path, feed, videos=True)
+    folder = tmp_path / "u"
+    folder.mkdir()
+    (folder / "u_old.jpg").write_bytes(b"x")  # already on disk: not reported
+    monkeypatch.setattr(loader, "format_filename", lambda p, target: f"{target}_{p.shortcode}")
+
+    def download_post(post, target):
+        if post.shortcode == "new":
+            for name in ("u_new_10.jpg", "u_new_2.mp4", "u_new_1.jpg", "u_new.txt"):
+                (folder / name).write_bytes(b"x")
+    monkeypatch.setattr(loader, "download_post", download_post)
+    saved = []
+    downloader.download_user(loader, "u", log=lambda m: None, on_saved=saved.append)
+    assert len(saved) == 1 and saved[0].account == "u" and saved[0].shortcode == "new"
+    assert [f.name for f in saved[0].files] == ["u_new_1.jpg", "u_new_2.mp4", "u_new_10.jpg"]

@@ -13,7 +13,8 @@ def test_windows_request_is_set_and_cleared(monkeypatch):
     monkeypatch.setattr(awake, "_windows_set", lambda flags: calls.append(flags) or True)
     with awake.keep_awake() as ok:
         assert ok
-        assert calls == [awake.ES_CONTINUOUS | awake.ES_SYSTEM_REQUIRED]
+        # Screen kept on too: on battery, Modern Standby starts once it turns off.
+        assert calls == [awake.ES_CONTINUOUS | awake.ES_SYSTEM_REQUIRED | awake.ES_DISPLAY_REQUIRED]
     assert calls[-1] == awake.ES_CONTINUOUS  # sleep allowed again
 
 
@@ -44,7 +45,7 @@ def test_real_windows_call_succeeds():
 
 def test_commands_for_macos_and_linux():
     found = lambda name: f"/usr/bin/{name}"  # noqa: E731 - stand-in for shutil.which
-    assert awake.awake_command("darwin", 42, found) == ["caffeinate", "-i", "-w", "42"]
+    assert awake.awake_command("darwin", 42, found) == ["caffeinate", "-d", "-i", "-w", "42"]
     linux = awake.awake_command("linux", 42, found)
     assert linux[0] == "systemd-inhibit" and "--what=sleep:idle" in linux
     assert awake.awake_command("linux", 42, lambda name: None) is None

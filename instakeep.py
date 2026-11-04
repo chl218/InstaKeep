@@ -9,7 +9,7 @@ Run it from anywhere:
     python instakeep.py --rescan NAME    next "all posts" run looks at every post again
 
 On first start it checks its setup and, after asking, creates .venv and installs
-InstaKeep's dependencies (instaloader, piexif) into it. Only the standard library is used before that.
+InstaKeep's dependencies (instaloader, piexif, Pillow) into it. Only the standard library is used before that.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "src"))
 
 # Only standard-library modules can be imported here: setup hasn't checked yet
-# whether instaloader and piexif are installed. igdl.security is stdlib-only.
+# whether instaloader, piexif and Pillow are installed. igdl.security is stdlib-only.
 from igdl.security import describe_unexpected, normalize_username, safe_console, strip_control  # noqa: E402
 from instakeep import __version__, bootstrap, paths  # noqa: E402
 

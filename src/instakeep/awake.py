@@ -1,14 +1,15 @@
-"""Keep the computer from going to sleep while a download runs.
+"""Keep the computer awake, screen on, while a download runs.
 
-Without this, a locked computer can go to sleep (or, on PCs with "Modern
-Standby", into standby once the screen turns off), and the download pauses
-until someone wakes it. The screen itself may still turn off and lock; only
-sleep is held off, and only for as long as the download runs.
+Without this, a locked computer can go to sleep and the download pauses until
+someone wakes it. On PCs with "Modern Standby", turning the screen off is what
+starts standby, and on battery Windows ignores a plain "don't sleep" request
+once the screen is off. So the screen is kept on too. It can still be locked
+(Win+L); the lock screen just stays lit. Only for as long as the download runs.
 
-  Windows: SetThreadExecutionState(ES_SYSTEM_REQUIRED). The request belongs to
-           the calling thread, so start and stop from the downloading thread.
-           Windows also drops it if that thread ends.
-  macOS:   `caffeinate -i -w <pid>` (ends by itself if this program exits).
+  Windows: SetThreadExecutionState(ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED).
+           The request belongs to the calling thread, so start and stop from
+           the downloading thread. Windows also drops it if that thread ends.
+  macOS:   `caffeinate -d -i -w <pid>` (ends by itself if this program exits).
   Linux:   `systemd-inhibit --what=sleep:idle ... sleep infinity`, if available.
 
 Standard library only. If the system offers no way to do it, downloads still
@@ -26,7 +27,9 @@ from typing import Callable, Iterator
 
 # Windows SetThreadExecutionState flags.
 ES_CONTINUOUS = 0x80000000       # the setting lasts until changed (not a one-off nudge)
-ES_SYSTEM_REQUIRED = 0x00000001  # don't sleep, even when idle or the screen is off
+ES_SYSTEM_REQUIRED = 0x00000001  # don't sleep when idle
+ES_DISPLAY_REQUIRED = 0x00000002  # don't turn the screen off (which starts Modern Standby)
+KEEP_AWAKE = ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
 
 
 def _windows_set(flags: int) -> bool:
@@ -35,10 +38,11 @@ def _windows_set(flags: int) -> bool:
 
 
 def awake_command(platform: str, pid: int, which: Callable[[str], str | None] = shutil.which) -> list[str] | None:
-    """The command that holds off sleep on macOS/Linux while it runs, or None."""
+    """The command that holds off sleep (and the screen turning off) on macOS/Linux
+    while it runs, or None."""
     if platform == "darwin" and which("caffeinate"):
-        # -i: no idle sleep. -w: stop when this process exits, even if it crashes.
-        return ["caffeinate", "-i", "-w", str(pid)]
+        # -d: screen stays on. -i: no idle sleep. -w: stop when this process exits.
+        return ["caffeinate", "-d", "-i", "-w", str(pid)]
     if platform.startswith("linux") and which("systemd-inhibit"):
         return ["systemd-inhibit", "--what=sleep:idle", "--who=InstaKeep",
                 "--why=Downloading Instagram posts", "--mode=block", "sleep", "infinity"]
@@ -47,12 +51,12 @@ def awake_command(platform: str, pid: int, which: Callable[[str], str | None] = 
 
 @contextmanager
 def keep_awake(log: Callable[[str], None] = lambda _m: None) -> Iterator[bool]:
-    """Hold off sleep inside the `with` block. Yields True if it worked.
+    """Hold off sleep and keep the screen on inside the `with` block. Yields True if it worked.
 
     On Windows, enter and leave it on the same thread (the one downloading).
     """
     if sys.platform == "win32":
-        ok = _windows_set(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+        ok = _windows_set(KEEP_AWAKE)
         if not ok:
             log("Couldn't stop Windows from sleeping during the download.")
         try:

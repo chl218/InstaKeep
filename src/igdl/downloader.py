@@ -220,6 +220,26 @@ def _post_files(folder: Path, basename: str) -> set[str]:
     return {p.name for p in folder.glob(glob.escape(basename) + "*")}
 
 
+@dataclass
+class SavedPost:
+    """One post's newly saved media files, passed to the on_saved callback."""
+    account: str         # the account name, e.g. "natgeo"
+    shortcode: str
+    date: datetime       # when it was posted (UTC)
+    files: list[Path]    # new image/video files, in slide order
+
+
+def _slide_order(name: str) -> tuple[int, str]:
+    # x.jpg, x_1.jpg, x_2.jpg ... x_10.jpg: same prefix, so shorter names come first.
+    return len(name), name
+
+
+def _new_media(folder: Path, names: set[str]) -> list[Path]:
+    """The image/video files among `names`, as paths in slide order."""
+    media = [n for n in names if Path(n).suffix.lower() in IMAGE_SUFFIXES | VIDEO_SUFFIXES]
+    return [folder / n for n in sorted(media, key=_slide_order)]
+
+
 def _has_media(names: set[str]) -> bool:
     """True if any of these file names is an image or a video."""
     return any(Path(n).suffix.lower() in IMAGE_SUFFIXES | VIDEO_SUFFIXES for n in names)
@@ -249,6 +269,7 @@ def download_user(
     stats: DownloadStats | None = None,
     folder_name: str | None = None,
     stop_at_known: bool = False,
+    on_saved: Callable[[SavedPost], None] | None = None,
 ) -> int:
     """Download a user's posts, newest first. Returns how many were saved.
 
@@ -259,6 +280,10 @@ def download_user(
     stop_at_known=True (only used without a limit): stop after KNOWN_STREAK posts
     in a row that are already on disk, not counting the first MAX_PINNED posts
     (pinned posts can be old). For profiles that were fully downloaded before.
+
+    on_saved(SavedPost) is called after each post that saved new media files
+    (after its hashtag Tags are written), on the downloading thread. The window
+    uses it to preview the newest image.
 
     tags=True writes each caption's #hashtags into the post's images' Tags
     (independent of the caption .txt option in build_loader).
@@ -345,7 +370,7 @@ def download_user(
             seen += 1
             log(f"[{count}/{total}] {post.date_utc:%Y-%m-%d} {post.shortcode}")
             basename = None
-            if stats is not None or tags or stop_early:
+            if stats is not None or tags or stop_early or on_saved:
                 basename = loader.format_filename(post, target=target)
             before = _post_files(folder, basename) if basename else set()
             if stats is not None:
@@ -355,11 +380,12 @@ def download_user(
             # Saves the media (+ .txt/.json). Files that already exist are skipped,
             # which is what makes re-running after an interruption safe.
             loader.download_post(post, target=target)
+            new_files = _post_files(folder, basename) - before if basename else set()
             if stats is not None:
                 # Rate-limit pauses are measured separately, so leave them out here.
                 paused = getattr(controller, "paused_seconds", 0.0) - paused_at_start
                 seconds = max(0.0, time.monotonic() - started - paused)
-                _count_new_files(stats, _post_files(folder, basename) - before, seconds)
+                _count_new_files(stats, new_files, seconds)
 
             if tags:
                 # "#portrait" in the caption -> "#portrait" in each image's Tags.
@@ -367,6 +393,8 @@ def download_user(
                 hashtags = extract_hashtags(post.caption)
                 if hashtags and tag_post_images(folder, basename, hashtags):
                     log(f"    tags: {'; '.join(hashtags)}")
+            if on_saved and (media := _new_media(folder, new_files)):
+                on_saved(SavedPost(target, post.shortcode, post.date_utc, media))
 
             if stop_early and seen > MAX_PINNED:
                 known_in_a_row = known_in_a_row + 1 if _has_media(before) else 0
@@ -401,6 +429,7 @@ def download_single_post(
     log: Callable[[str], None] = print,
     tags: bool = False,
     folder_for: Callable[[str], str] | None = None,
+    on_saved: Callable[[SavedPost], None] | None = None,
 ) -> PostResult:
     """Download one post (from security.parse_post_url) into output_dir/<owner>/.
 
@@ -411,6 +440,7 @@ def download_single_post(
 
     folder_for(owner) gives the folder name for an account (InstaKeep keeps a
     renamed account's old folder); without it, the folder is the owner's name.
+    on_saved works as in download_user().
     """
     # One request: the post's data, including its owner.
     post = instaloader.Post.from_shortcode(loader.context, shortcode)
@@ -435,12 +465,13 @@ def download_single_post(
     basename = loader.format_filename(post, target=target)
     before = _post_files(folder, basename)
     loader.download_post(post, target=target)  # files already on disk are skipped
-    new = {n for n in _post_files(folder, basename) - before
-           if Path(n).suffix.lower() in IMAGE_SUFFIXES | VIDEO_SUFFIXES}
+    new = _new_media(folder, _post_files(folder, basename) - before)
     if tags:
         hashtags = extract_hashtags(post.caption)
         if hashtags and tag_post_images(folder, basename, hashtags):
             log(f"    tags: {'; '.join(hashtags)}")
+    if on_saved and new:
+        on_saved(SavedPost(target, post.shortcode, post.date_utc, new))
     return PostResult(owner, saved=True, new_files=len(new))
 
 

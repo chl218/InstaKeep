@@ -43,7 +43,7 @@ Usernames, captions and error text from Instagram are untrusted.
 
 ## Startup constraint
 
-`igdl/security.py`, `instakeep/__init__.py`, `paths.py` and `bootstrap.py` run before the dependencies are known to be installed. In those files, use the standard library only: no instaloader, no piexif, and no other `igdl` module. `instakeep.py` imports everything else only after `ensure_ready()` succeeds.
+`igdl/security.py`, `instakeep/__init__.py`, `paths.py` and `bootstrap.py` run before the dependencies are known to be installed. In those files, use the standard library only: no instaloader, no piexif, no Pillow, and no other `igdl` module. `instakeep.py` imports everything else only after `ensure_ready()` succeeds.
 
 ## Tests
 
@@ -56,4 +56,4 @@ Usernames, captions and error text from Instagram are untrusted.
 
 ## Dependencies
 
-Runtime dependencies are `instaloader` and `piexif` only. The window is standard-library `tkinter`. Adding a runtime dependency means updating `pyproject.toml`, `bootstrap.REQUIRED_MODULES` and the README setup table. Prefer the standard library.
+Runtime dependencies are `instaloader`, `piexif` and `pillow` only. The window is standard-library `tkinter`; Pillow is only for the image preview (`instakeep/preview.py`), because tkinter can't show JPEG. Adding a runtime dependency means updating `pyproject.toml`, `bootstrap.REQUIRED_MODULES` and the README setup table. Prefer the standard library.

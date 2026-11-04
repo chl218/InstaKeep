@@ -204,6 +204,7 @@ def run_all(
     describe_error=cli.describe_error,
     on_user_start: Callable[[str], None] | None = None,
     lookup_username=downloader.username_for_id,
+    on_saved: Callable[[downloader.SavedPost], None] | None = None,
 ) -> list[UserResult]:
     """Download the newest `limit` posts (or all posts) of each saved user, or just `only`.
 
@@ -212,6 +213,8 @@ def run_all(
     Each user's download is timed, and its file counts, times, requests and
     pauses are added to the user's records (used for the time estimates).
     on_user_start(name) is called as each user begins (the window's timer).
+    on_saved(SavedPost) is called after each post that saved new files (the
+    window's image preview); see downloader.download_user.
     An "all posts" run of a user who was fully downloaded before stops at posts
     already on disk. A user who isn't found is looked up by their saved ID, and
     a renamed account is switched to its new name (see _follow_rename).
@@ -262,7 +265,8 @@ def run_all(
         try:
             download_user(loader, name, limit, log=log, should_stop=should_stop,
                           tags=s["tags"], stats=stats, folder_name=folder_name(user),
-                          stop_at_known=limit is None and user["full_scan_done"])
+                          stop_at_known=limit is None and user["full_scan_done"],
+                          on_saved=on_saved)
         except Exception as e:  # noqa: BLE001 - record every failure and keep going
             known = describe_error(e, name)
             code, message = known if known else (None, describe_unexpected(e))

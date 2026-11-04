@@ -6,7 +6,7 @@ Modules:
   tags.py        caption #hashtags -> the images' Tags (EXIF XPKeywords)
   security.py    pure helpers for untrusted input and text
 
-See README.md for usage and the architecture diagrams.
+See README.md for usage and docs/SDD.md for the design and architecture diagrams.
 """
 
 __version__ = "0.1.0"  # shown by `igdl --version`; keep in sync with pyproject.toml

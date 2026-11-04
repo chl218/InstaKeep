@@ -32,7 +32,7 @@ There are two packages under `src/`, and dependencies only go one way: `instakee
 
 Constraints that span several files:
 
-- **Stdlib-only until setup passes.** Before `ensure_ready()` returns, `instakeep.py` imports only `igdl.security`, `instakeep.__init__`, `bootstrap` and `paths`. Those modules must stay standard-library only: no instaloader or piexif, and no other `igdl` module. Everything else is imported after the check. `ensure_ready()` re-launches the script inside `.venv` when one exists.
+- **Stdlib-only until setup passes.** Before `ensure_ready()` returns, `instakeep.py` imports only `igdl.security`, `instakeep.__init__`, `bootstrap` and `paths`. Those modules must stay standard-library only: no instaloader, piexif or Pillow, and no other `igdl` module. Everything else is imported after the check. `ensure_ready()` re-launches the script inside `.venv` when one exists.
 - **Errors.** Known instaloader errors become one line through `cli.describe_error()`. Unexpected errors keep their traceback: `igdl` re-raises, `instakeep.py`'s `run()` re-raises (and copies it into the `--run` log first). The window worker, Tk callbacks and `--run` show `igdl.security.describe_unexpected()`, which is a summary line plus the full traceback.
 - **Timing and estimates.** `downloader.DownloadStats` measures one user's run: per-post time split between images and videos by file count, posts already on disk excluded, rate-limit pauses subtracted. `_PauseAwareRateController` is always installed and counts requests and paused seconds. `runner.run_all` adds each run to the user's `stats` in the store (`store.STAT_FIELDS`; `media_count` and `last_*` are replaced, the rest summed). Only a full pass (`DownloadStats.complete`) may stand in for a missing `media_count`. `estimate.py` estimates a full pass per post × `media_count`, and an "all posts" run of a `full_scan_done` user as only the new posts. `instakeep/estimate.py` is pure functions over those records, plus instaloader's limit (`QUERY_LIMIT` per `QUERY_WINDOW`).
 - **The window and `--run` are separate processes sharing `data/instakeep.json`.**
@@ -46,7 +46,8 @@ Constraints that span several files:
   - A rate-limit error (exit code 4) ends the whole run.
   - A full run goes in `run_order()`: least recent `last_ok` first. A "not found" user with a saved `userid` is looked up and renamed in the list (`_follow_rename`).
   - It takes injectable `build_loader` / `download_user` / `describe_error`; `tests/test_runner.py` passes fakes through these.
-- **No sleep while downloading.** `awake.keep_awake()` wraps every download (window `_run`/`_run_post`, `run_headless`), inside the `RunLock`. On Windows the request belongs to the calling thread, so it's entered on the downloading thread. It only holds off sleep, never the screen.
+- **No sleep while downloading.** `awake.keep_awake()` wraps every download (window `_run`/`_run_post`, `run_headless`), inside the `RunLock`. On Windows the request belongs to the calling thread, so it's entered on the downloading thread. It holds off sleep and keeps the screen on: on battery, Modern Standby ignores a sleep-only request once the screen turns off.
+- **Image preview.** `download_user`/`download_single_post` take `on_saved(SavedPost)`, called on the downloading thread after each post with new media; `runner.run_all` passes it through. The window loads and shrinks the newest image there (`preview.load_preview`, Pillow) and posts `("preview", ...)`; the Tk thread only fits it and makes the `PhotoImage`. "Show preview" isn't a saved setting: it's on at every start.
 - **GUI threading.** Downloads run on a worker thread that never touches widgets. It posts tuples (`"log"`, `"pause"`, `"user_done"`, `"done"`) to `App.messages`, which `_poll_messages()` drains on the Tk thread every 100 ms. Keep tkinter variables out of the worker; read them into plain values first.
 - **Untrusted input.**
   - Every username goes through `igdl.security.is_valid_username` before it's used as a request or folder name. The saved list stores names lowercase (`store.normalize_username`).
@@ -56,4 +57,4 @@ Constraints that span several files:
 
 `--run` exit codes: 0 ok, 1 some user failed (or a bug, with traceback), 3 setup incomplete or a newer data file, 4 rate-limited, 5 another download running, 130 Ctrl+C. `igdl` exit codes: 0, 1 not found, 2 private, 4 rate-limited, 130 Ctrl+C (a bug exits 1 with a traceback).
 
-Python style and the rules a change must keep (errors, untrusted input, rate limits, threads, tests, dependencies) are in [memory/python/CLAUDE.md](memory/python/CLAUDE.md).
+The full design (data file, run, window, decisions) is in [docs/SDD.md](docs/SDD.md); keep it up to date with behavior changes. Python style and the rules a change must keep (errors, untrusted input, rate limits, threads, tests, dependencies) are in [memory/python/CLAUDE.md](memory/python/CLAUDE.md).

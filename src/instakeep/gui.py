@@ -13,6 +13,11 @@ _poll_messages() reads on the main thread every POLL_MS milliseconds:
   ("user_done", result)    one user finished: refresh its row
   ("post_owner", name, add) single post: its account is known; add=True adds it to the list
   ("done", text, ok)       the whole run finished
+  ("preview", image, path, caption)  a newly saved image, loaded and shrunk off the Tk thread
+
+The right side shows the image downloaded most recently in this session
+(preview.py), next to the tabs. Images from before the window opened are never
+loaded; "Show preview" hides it for this session (it's on at every start).
 
 If a newer InstaKeep wrote the data file, this window can't save to it (it would
 drop fields it doesn't know): downloading and editing the list are turned off,
@@ -38,6 +43,7 @@ from igdl.security import describe_unexpected, parse_post_url, strip_control
 
 from . import awake, paths, runner
 from .estimate import QUERY_LIMIT, QUERY_WINDOW, estimate, format_duration
+from . import preview
 from .store import NewerStoreError, Store
 
 POLL_MS = 100  # how often the window checks for messages from the download thread
@@ -80,6 +86,8 @@ SORT_KEYS = {
 
 
 GRID_COLOR = "#d0d0d0"  # the table's cell borders
+STRIPE_COLOR = "#e6f0fa"  # light blue, on every other row of the table
+STRIPE_TAG = "stripe"
 
 
 def grid_lines(widths: list[int], rows: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
@@ -103,6 +111,14 @@ def grid_lines(widths: list[int], rows: list[tuple[int, int, int, int]]) -> list
     return lines
 
 
+def _set_wrap(label: ttk.Label, width: int) -> None:
+    """Wrap a label's text at `width` pixels (at least 200). Only changes it when
+    the width really changed: every change makes Tk lay the window out again."""
+    width = max(200, width)
+    if int(str(label.cget("wraplength")) or 0) != width:
+        label.configure(wraplength=width)
+
+
 def sort_users(users: list[dict], column: str | None, descending: bool = False) -> list[dict]:
     """The users ordered by a table column (None: the saved list order).
     Ties keep the list order."""
@@ -113,6 +129,8 @@ TITLE = "InstaKeep"
 SELECT_FIRST = "Select one or more users in the list first."
 NOTHING_CHOSEN = "Tick Images or Videos (or both) under Download options: there's nothing to download."
 MIN_HEIGHT = 700
+PREVIEW_LINES = 18  # the preview area's starting size, in text lines (scales with the screen)
+NO_IMAGE = "No image yet"
 
 
 def format_last(user: dict) -> str:
@@ -170,6 +188,15 @@ class App:
         self.sort: tuple[str, bool] | None = None
         self.grid_frames: list[tk.Frame] = []  # the drawn cell borders (see _draw_grid)
         self._grid_pending = False
+        # Image preview. preview_on is read by the worker thread, so it's an Event.
+        self.preview_on = threading.Event()
+        self.preview_on.set()
+        self.preview_image = None   # the loaded (shrunk) PIL image on show
+        self.preview_photo = None   # its Tk PhotoImage; must be kept, or Tk drops it
+        self.preview_path: Path | None = None
+        self.preview_caption_text = ""
+        self.unshown: tuple[Path, str] | None = None  # newest image saved while hidden
+        self._fit_pending = False
 
         # A bug in a button handler: also show its traceback in the log box.
         root.report_callback_exception = self._on_callback_error
@@ -192,6 +219,7 @@ class App:
         self.status = tk.StringVar(value="Ready.")
         self.estimate_all = tk.StringVar()
         self.estimate_selected = tk.StringVar()
+        self.show_preview = tk.BooleanVar(value=True)  # not saved: on at every start
 
         self._build_widgets()
         self._refresh_states()
@@ -210,8 +238,9 @@ class App:
     # ------------------------------------------------------------------ layout
 
     def _build_widgets(self) -> None:
-        """Lay out the window: the Batch and Individual tabs, then the shared
-        download options, Stop / Open folder, log and status line."""
+        """Lay out the window: the Batch and Individual tabs with the image preview
+        to their right, then the shared download options, Stop / Open folder /
+        Show preview, log and status line across the full width."""
         pad = {"padx": 8, "pady": 4}
         main = ttk.Frame(self.root, padding=12)
         main.grid(sticky="nsew")
@@ -222,9 +251,16 @@ class App:
         # Roomier tab labels. Sized from the font so the padding grows with screen scaling.
         line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
         ttk.Style(self.root).configure("TNotebook.Tab", padding=(line // 2, line // 6))
-        self.tabs = ttk.Notebook(main)
-        self.tabs.grid(row=0, column=0, sticky="nsew", **pad)
+        top = ttk.Frame(main)
+        top.grid(row=0, column=0, sticky="nsew")
+        top.columnconfigure(0, weight=1)
+        top.rowconfigure(0, weight=1)
         main.rowconfigure(0, weight=1)
+        self.tabs = ttk.Notebook(top)
+        self.tabs.grid(row=0, column=0, sticky="nsew", **pad)
+        self.preview_frame = ttk.LabelFrame(top, text="Latest image", padding=8)
+        self.preview_frame.grid(row=0, column=1, sticky="nsew", **pad)
+        self._build_preview(self.preview_frame, line)
         batch = ttk.Frame(self.tabs, padding=4)
         batch.columnconfigure(0, weight=1)
         self.tabs.add(batch, text="Batch")
@@ -250,16 +286,40 @@ class App:
         ttk.Button(opts, text="Browse…", command=self._pick_output_dir).grid(row=1, column=2, pady=(6, 0))
 
         buttons = ttk.Frame(main)
-        buttons.grid(row=2, column=0, sticky="w", **pad)
+        buttons.grid(row=2, column=0, sticky="ew", **pad)
+        buttons.columnconfigure(2, weight=1)
         self.stop_button = ttk.Button(buttons, text="Stop", command=self._stop, state="disabled")
         self.stop_button.grid(row=0, column=0, padx=(0, 6))
         ttk.Button(buttons, text="Open folder", command=self._open_folder).grid(row=0, column=1)
+        ttk.Checkbutton(buttons, text="Show preview", variable=self.show_preview,
+                        command=self._toggle_preview).grid(row=0, column=2, sticky="e")
 
         # Log + status line.
         self.log_box = scrolledtext.ScrolledText(main, height=8, wrap="word", state="disabled")
         self.log_box.grid(row=3, column=0, sticky="nsew", **pad)
         main.rowconfigure(3, weight=1)
         ttk.Label(main, textvariable=self.status).grid(row=4, column=0, sticky="w", **pad)
+
+    def _build_preview(self, frame: ttk.LabelFrame, line: int) -> None:
+        """The newest image, a caption (account, date, post) and Open image."""
+        side = line * PREVIEW_LINES
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+        # A fixed-size area (grid_propagate off), so a new image doesn't resize the window.
+        self.preview_area = ttk.Frame(frame, width=side, height=side)
+        self.preview_area.grid(row=0, column=0, sticky="nsew")
+        self.preview_area.grid_propagate(False)
+        self.preview_area.columnconfigure(0, weight=1)
+        self.preview_area.rowconfigure(0, weight=1)
+        self.preview_label = ttk.Label(self.preview_area, text=NO_IMAGE, anchor="center")
+        self.preview_label.grid(row=0, column=0, sticky="nsew")
+        self.preview_caption = ttk.Label(frame, text="", wraplength=side, justify="left")
+        self.preview_caption.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.open_image_button = ttk.Button(frame, text="Open image", command=self._open_image,
+                                            state="disabled")
+        self.open_image_button.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        # Refit the image when the panel changes size (window resized).
+        self.preview_area.bind("<Configure>", lambda _e: self._schedule_fit(), add="+")
 
     def _build_batch_tab(self, main: ttk.Frame, pad: dict) -> None:
         """The saved users: table, add/remove, how many posts, estimate, run buttons."""
@@ -276,6 +336,7 @@ class App:
         line = tkfont.nametofont("TkDefaultFont").metrics("linespace")
         ttk.Style(self.root).configure("Treeview", rowheight=line + ROW_PADDING)
         self.tree = ttk.Treeview(table, columns=tuple(COLUMNS), show="headings", height=8)
+        self.tree.tag_configure(STRIPE_TAG, background=STRIPE_COLOR)
         for key, heading in COLUMNS.items():
             # Click a heading to sort by it; click again to reverse.
             self.tree.heading(key, text=heading, anchor="center",
@@ -338,8 +399,7 @@ class App:
             label.configure(wraplength=600)  # until the window knows its width (see below)
             label.grid(row=row, column=0, sticky="w", pady=(4, 0) if row == 2 else 0)
         # Wrap the text at the section's current width, so it follows the window.
-        est.bind("<Configure>", lambda e: [lb.configure(wraplength=max(200, e.width - 24))
-                                           for lb in labels])
+        est.bind("<Configure>", lambda e: [_set_wrap(lb, e.width - 24) for lb in labels])
 
         # Run buttons.
         buttons = ttk.Frame(main)
@@ -364,7 +424,7 @@ class App:
             "It's saved in the output folder under the account's name, so a Batch "
             "download of that account skips it. Public accounts only."))
         hint.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        tab.bind("<Configure>", lambda e: hint.configure(wraplength=max(200, e.width - 24)))
+        tab.bind("<Configure>", lambda e: _set_wrap(hint, e.width - 24))
 
     # -------------------------------------------------------------- user list
 
@@ -373,10 +433,11 @@ class App:
         selected = set(self.tree.selection())
         self.tree.delete(*self.tree.get_children())
         column, descending = self.sort or (None, False)
-        for user in sort_users(self.store.users, column, descending):
+        for row, user in enumerate(sort_users(self.store.users, column, descending)):
             name, st = user["username"], user["stats"]
             ran = bool(user.get("last_run"))
-            self.tree.insert("", "end", iid=name, values=(
+            # Every other row is light blue; counted in display order, so sorting keeps the stripes.
+            self.tree.insert("", "end", iid=name, tags=(STRIPE_TAG,) if row % 2 else (), values=(
                 name, format_last(user), format_result(user),
                 st["last_images"] + st["last_videos"] if ran else "",
                 format_duration(st["last_seconds"]) if ran else "",
@@ -411,7 +472,9 @@ class App:
             self.tree.column(key, width=width, minwidth=width)
             total += width
         # Table + scrollbar + the frame and grid padding around it.
-        self.root.minsize(total + 80, MIN_HEIGHT)
+        # Table + scrollbar + the frame and grid padding around it, and the preview.
+        extra = self.preview_frame.winfo_reqwidth() + 16 if self.show_preview.get() else 0
+        self.root.minsize(total + 80 + extra, MIN_HEIGHT)
         self._schedule_grid()
 
     def _schedule_grid(self) -> None:
@@ -693,6 +756,7 @@ class App:
                     on_pause=lambda secs: put(("pause", secs)),
                     on_user_done=lambda r: put(("user_done", r)),
                     on_user_start=lambda name: put(("user_start", name)),
+                    on_saved=self._on_saved,
                     only=only,
                 )
             ok = sum(r.ok for r in results)
@@ -727,7 +791,7 @@ class App:
             loader.context.error = lambda msg, repeat_at_end=True: log(f"warning: {msg}")
             with awake.keep_awake(log=log):
                 result = download_post(loader, shortcode, log=log, tags=settings["tags"],
-                                       folder_for=self.store.folder_of)
+                                       folder_for=self.store.folder_of, on_saved=self._on_saved)
             put(("post_owner", result.owner, add_owner))
             if not result.saved:
                 kind = "an image" if settings["videos"] else "a video"
@@ -766,6 +830,8 @@ class App:
                     self.timing = None
                     self.store.reload()  # the worker recorded this user's result and times
                     self._refresh_table()
+                elif kind == "preview":
+                    self._show_preview(msg[1], msg[2], msg[3])
                 elif kind == "post_owner":
                     self._on_post_owner(msg[1], msg[2])
                 elif kind == "done":
@@ -814,6 +880,99 @@ class App:
         self.log_box.configure(state="normal")
         self.log_box.delete("1.0", "end")
         self.log_box.configure(state="disabled")
+
+    # ------------------------------------------------------------ image preview
+
+    def _on_saved(self, saved) -> None:
+        """Runs on the worker thread after a post saved new files: load its newest
+        image for the preview. Videos are skipped (the preview stays as it was)."""
+        path = preview.newest_image(saved)
+        if path is None:
+            return
+        caption = preview.caption_for_post(saved, path)
+        if not self.preview_on.is_set():
+            self.unshown = (path, caption)  # shown if the preview is turned back on
+            return
+        image = preview.load_preview(path)
+        if image is not None:
+            self.messages.put(("preview", image, path, caption))
+
+    def _load_in_background(self, path: Path, caption: str) -> None:
+        """Load an image for the preview without blocking the window."""
+        def work():
+            image = preview.load_preview(path)
+            if image is not None:
+                self.messages.put(("preview", image, path, caption))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_preview(self, image, path: Path, caption: str) -> None:
+        """Show a loaded image (Tk thread)."""
+        if not self.show_preview.get():
+            self.unshown = (path, caption)
+            return
+        self.preview_image, self.preview_path = image, path
+        self.preview_caption_text = caption
+        self.preview_caption.configure(text=caption)
+        self.open_image_button.configure(state="normal")
+        self._render_preview()
+
+    def _schedule_fit(self) -> None:
+        if not self._fit_pending:
+            self._fit_pending = True
+            self.root.after(100, self._render_preview)
+
+    def _render_preview(self) -> None:
+        """Fit the current image into the preview area and show it."""
+        from PIL import ImageTk  # imported here: needs Tk, and only once there's an image
+
+        self._fit_pending = False
+        if self.preview_image is None or not self.preview_area.winfo_exists():
+            return
+        width = self.preview_area.winfo_width()
+        height = self.preview_area.winfo_height()
+        if width < 2 or height < 2:  # not laid out yet: use its starting size
+            width = height = int(self.preview_area.cget("width"))
+        fitted = preview.fit(self.preview_image, width, height)
+        self.preview_photo = ImageTk.PhotoImage(fitted, master=self.root)
+        self.preview_label.configure(image=self.preview_photo, text="")
+
+    def _toggle_preview(self) -> None:
+        """Show preview ticked or unticked: show or hide the right column.
+
+        The window gets an exact new size: as wide as before, plus or minus the
+        panel. Letting it follow its contents instead (geometry("")) never settles,
+        because the wrapping labels size themselves from the window's width.
+        """
+        self.root.update_idletasks()
+        width, height = self.root.winfo_width(), self.root.winfo_height()
+        panel = self.preview_frame.winfo_reqwidth() + 16  # its grid padding, both sides
+        if self.show_preview.get():
+            self.preview_on.set()
+            self.preview_frame.grid()
+            width += panel
+            if self.unshown:
+                path, caption = self.unshown
+                self.unshown = None
+                self._load_in_background(path, caption)
+        else:
+            self.preview_on.clear()
+            self.preview_frame.grid_remove()
+            width -= panel
+        self._fit_columns()  # the minimum width, with or without the panel
+        if width > 1 and height > 1:  # 1x1: not on screen yet, nothing to resize
+            self.root.geometry(f"{width}x{height}")
+
+    def _open_image(self) -> None:
+        """Open the previewed image in the system's image viewer."""
+        path = self.preview_path
+        # Only ever an image file InstaKeep saved: never something that could run.
+        if path is None or not preview.is_image(path) or not path.is_file():
+            return
+        if sys.platform == "win32":
+            os.startfile(path)  # noqa: S606 - opens an image file in the default viewer
+        else:
+            subprocess.run(["open" if sys.platform == "darwin" else "xdg-open", str(path.resolve())],
+                           check=False)
 
     def _open_folder(self) -> None:
         """Open a user's folder (or the output folder) in the file manager.

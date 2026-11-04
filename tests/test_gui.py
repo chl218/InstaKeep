@@ -249,7 +249,7 @@ def test_post_download_uses_a_renamed_accounts_folder(app, store):
     store.rename_user("natgeo", "natgeo_new")
     seen = []
 
-    def download_post(loader, code, log, tags, folder_for):
+    def download_post(loader, code, log, tags, folder_for, **_kw):
         seen.append(folder_for("natgeo_new"))
         return downloader.PostResult("natgeo_new", True, 1)
     _run_post(app, False, download_post)
@@ -373,3 +373,129 @@ def test_window_download_keeps_the_computer_awake_while_it_runs(app, monkeypatch
     monkeypatch.setattr(runner, "run_all", lambda *a, **k: events.append("download") or [])
     app._run(None)  # what the worker thread runs
     assert events == ["awake", "download", "sleep allowed"]
+
+
+# ------------------------------------------------------------- image preview
+
+def _jpeg(path):
+    from PIL import Image
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (600, 300), (10, 120, 200)).save(path, "JPEG")
+    return path
+
+
+def _drain(app):
+    """Wait for background preview loading, then handle its messages."""
+    deadline = time.monotonic() + 5
+    while app.messages.empty() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    app._poll_messages()
+
+
+def test_preview_is_on_at_start_and_beside_the_tabs(app):
+    assert app.show_preview.get() is True
+    assert app.preview_frame.winfo_manager() == "grid"
+    assert app.preview_frame.master is app.tabs.master  # same row as the tabs (layout B)
+    assert app.preview_label.cget("text") == gui.NO_IMAGE
+
+
+def test_saved_image_is_previewed_and_videos_are_skipped(app, tmp_path):
+    from datetime import datetime
+
+    from igdl.downloader import SavedPost
+    img = _jpeg(tmp_path / "downloads" / "natgeo" / "natgeo_x_1.jpg")
+    app._on_saved(SavedPost("natgeo", "DfN9", datetime(2026, 11, 1), [img]))  # as the worker does
+    app._poll_messages()
+    assert app.preview_path == img and app.preview_photo is not None
+    assert app.preview_label.cget("text") == ""  # the image replaced "No image yet"
+    assert "@natgeo · 2026-11-01 · DfN9" in app.preview_caption.cget("text")
+    assert str(app.open_image_button.cget("state")) == "normal"
+    video = tmp_path / "downloads" / "natgeo" / "v.mp4"
+    app._on_saved(SavedPost("natgeo", "V1", datetime(2026, 11, 2), [video]))
+    app._poll_messages()
+    assert app.preview_path == img  # unchanged
+
+
+def test_hiding_the_preview_stops_loading_and_shows_the_newest_when_back(app, tmp_path):
+    from datetime import datetime
+
+    from igdl.downloader import SavedPost
+    app.show_preview.set(False)
+    app._toggle_preview()
+    assert app.preview_frame.winfo_manager() == ""  # hidden
+    img = _jpeg(tmp_path / "downloads" / "nasa" / "nasa_y.jpg")
+    app._on_saved(SavedPost("nasa", "Y1", datetime(2026, 11, 3), [img]))
+    assert app.messages.empty()  # nothing loaded while hidden
+    app.show_preview.set(True)
+    app._toggle_preview()
+    _drain(app)
+    assert app.preview_frame.winfo_manager() == "grid" and app.preview_path == img
+
+
+def test_images_from_before_the_session_are_not_shown(tk_root, store, tmp_path):
+    _jpeg(tmp_path / "downloads" / "natgeo" / "natgeo_2026-11-01_23-53-04_AbC.jpg")
+    window = tk.Toplevel(tk_root)
+    window.withdraw()
+    try:
+        app = gui.App(window, store)
+        window.update()
+        time.sleep(0.2)  # nothing may be loading in the background either
+        app._poll_messages()
+        assert app.preview_path is None and app.preview_label.cget("text") == gui.NO_IMAGE
+        app.show_preview.set(False)
+        app._toggle_preview()
+        app.show_preview.set(True)
+        app._toggle_preview()  # turning it back on doesn't look on disk either
+        time.sleep(0.2)
+        app._poll_messages()
+        assert app.preview_path is None
+    finally:
+        window.destroy()
+
+
+def test_preview_setting_is_not_saved(app, store):
+    app.show_preview.set(False)
+    app._toggle_preview()
+    assert "show_preview" not in store.settings and "preview" not in store.settings
+
+
+def test_every_other_row_is_light_blue_even_after_sorting(app, store):
+    store.add_user("aaa")
+    app._refresh_table()
+
+    def striped():
+        return [gui.STRIPE_TAG in app.tree.item(iid, "tags") for iid in app.tree.get_children()]
+
+    assert striped() == [False, True, False]
+    assert str(app.tree.tag_configure(gui.STRIPE_TAG, "background")) == gui.STRIPE_COLOR
+    app._sort_by("user")  # new order, same stripes
+    assert app.tree.get_children() == ("aaa", "nasa", "natgeo") and striped() == [False, True, False]
+
+
+def test_hiding_the_preview_gives_the_window_a_fixed_size(app, monkeypatch):
+    # geometry("") made the window follow its contents, and the wrapping labels
+    # (sized from the window) kept resizing it forever. Now it gets an exact size.
+    sizes = []
+    monkeypatch.setattr(app.root, "winfo_width", lambda: 1500)
+    monkeypatch.setattr(app.root, "winfo_height", lambda: 800)
+    monkeypatch.setattr(app.root, "geometry", lambda size=None: sizes.append(size))
+    panel = app.preview_frame.winfo_reqwidth() + 16
+    app.show_preview.set(False)
+    app._toggle_preview()
+    app.show_preview.set(True)
+    app._toggle_preview()
+    assert sizes == [f"{1500 - panel}x800", f"{1500 + panel}x800"]
+    assert "" not in sizes
+
+
+def test_wrapping_only_changes_when_the_width_does(app, monkeypatch):
+    label = gui.ttk.Label(app.root, text="some long text")
+    gui._set_wrap(label, 400)
+    assert int(str(label.cget("wraplength"))) == 376 + 24
+    calls = []
+    real = label.configure
+    monkeypatch.setattr(label, "configure", lambda **kw: calls.append(kw) or real(**kw))
+    gui._set_wrap(label, 400)  # same width: left alone, so no new layout pass
+    assert calls == []
+    gui._set_wrap(label, 50)   # never narrower than 200
+    assert calls == [{"wraplength": 200}]

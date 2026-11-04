@@ -1,7 +1,7 @@
 """Setup check that runs before anything else. Uses only the standard library.
 
 ensure_ready() makes sure the program runs with a Python that has igdl's
-dependencies (instaloader, piexif). igdl itself is in src/ next to this package.
+dependencies (instaloader, piexif, Pillow). igdl itself is in src/ next to this package.
   1. Python must be 3.10 or newer.
   2. The window needs tkinter.
   3. If InstaKeep/.venv exists, the program re-launches itself inside it.
@@ -22,7 +22,7 @@ from typing import Callable
 from . import paths
 
 MIN_PYTHON = (3, 10)
-REQUIRED_MODULES = ("instaloader", "piexif")
+REQUIRED_MODULES = ("instaloader", "piexif", "PIL")  # PIL = Pillow, for the image preview
 EXIT_SETUP = 3  # exit code when setup is incomplete
 
 
@@ -141,7 +141,7 @@ def _install(say: Callable[[str], None]) -> Path | None:
                 say("Could not create the virtual environment.")
                 return None
         target = venv_python(paths.VENV)
-    say(f"Installing instaloader and piexif into {paths.VENV} (this can take a minute) ...")
+    say(f"Installing instaloader, piexif and Pillow into {paths.VENV} (this can take a minute) ...")
     cmd = [str(target), "-m", "pip", "install", "--disable-pip-version-check", "-e", str(paths.APP_DIR)]
     if subprocess.run(cmd).returncode != 0:
         say("pip install failed. See the messages above.")

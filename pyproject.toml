@@ -7,7 +7,7 @@ name = "instakeep"
 version = "0.1.0"
 description = "Keep a list of public Instagram profiles and download their newest posts"
 requires-python = ">=3.10"
-dependencies = ["instaloader>=4.14,<5", "piexif>=1.1.3"]
+dependencies = ["instaloader>=4.14,<5", "piexif>=1.1.3", "pillow>=10"]
 
 [project.optional-dependencies]
 dev = ["pytest"]
