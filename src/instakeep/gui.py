@@ -1,8 +1,10 @@
 """The InstaKeep window (tkinter, standard library only).
 
-Two tabs: Batch downloads the saved users' newest posts; Individual downloads
-one post from its link. The download options, Stop, the log and the status
-line below the tabs are shared, and only one download runs at a time.
+Three tabs: From user downloads the saved users' newest posts; From link downloads
+one post from its link; From file reads usernames and post links from a .txt file
+(add the usernames to the saved list, download the links). The download
+options, Stop, the log and the status line below the tabs are shared, and only
+one download runs at a time.
 
 Downloads run on a background thread that never touches widgets: tkinter isn't
 thread-safe. The thread sends messages through self.messages, which
@@ -39,7 +41,8 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 from tkinter import font as tkfont
 
 from igdl import cli, downloader
-from igdl.security import describe_unexpected, parse_post_url, strip_control
+from igdl.security import (describe_unexpected, parse_entries, parse_post_url,
+                           read_entries_file, strip_control)
 
 from . import awake, paths, runner
 from .estimate import QUERY_LIMIT, QUERY_WINDOW, estimate, format_duration
@@ -127,6 +130,11 @@ def sort_users(users: list[dict], column: str | None, descending: bool = False) 
     return sorted(users, key=SORT_KEYS[column], reverse=descending)
 TITLE = "InstaKeep"
 SELECT_FIRST = "Select one or more users in the list first."
+SELECT_LINKS_FIRST = "Select one or more links in the list first."
+NO_FILE_USERS = "Load a file with usernames first (From file tab)."
+NO_FILE_LINKS = "Load a file with post links first (From file tab)."
+ALREADY_LISTED = "  (already listed)"
+REJECTED_SHOWN = 5  # how many skipped lines the log shows after loading a file
 NOTHING_CHOSEN = "Tick Images or Videos (or both) under Download options: there's nothing to download."
 MIN_HEIGHT = 700
 PREVIEW_LINES = 18  # the preview area's starting size, in text lines (scales with the screen)
@@ -216,6 +224,10 @@ class App:
         self.output_dir = tk.StringVar(value=s["output_dir"])
         self.post_link = tk.StringVar()
         self.add_owner = tk.BooleanVar(value=False)
+        self.files_path = tk.StringVar()
+        self.files_add_owner = tk.BooleanVar(value=False)
+        self.files_users: list[str] = []                 # usernames from the loaded file
+        self.files_links: list[tuple[str, str]] = []     # (shortcode, link) from the loaded file
         self.status = tk.StringVar(value="Ready.")
         self.estimate_all = tk.StringVar()
         self.estimate_selected = tk.StringVar()
@@ -238,7 +250,7 @@ class App:
     # ------------------------------------------------------------------ layout
 
     def _build_widgets(self) -> None:
-        """Lay out the window: the Batch and Individual tabs with the image preview
+        """Lay out the window: the From user, From link and From file tabs with the image preview
         to their right, then the shared download options, Stop / Open folder /
         Show preview, log and status line across the full width."""
         pad = {"padx": 8, "pady": 4}
@@ -263,14 +275,17 @@ class App:
         self._build_preview(self.preview_frame, line)
         batch = ttk.Frame(self.tabs, padding=4)
         batch.columnconfigure(0, weight=1)
-        self.tabs.add(batch, text="Batch")
+        self.tabs.add(batch, text="From user")
         individual = ttk.Frame(self.tabs, padding=8)
         individual.columnconfigure(1, weight=1)
-        self.tabs.add(individual, text="Individual")
+        self.tabs.add(individual, text="From link")
+        files = ttk.Frame(self.tabs, padding=8)
+        self.tabs.add(files, text="From file")
         self._build_batch_tab(batch, pad)
         self._build_individual_tab(individual)
+        self._build_files_tab(files)
 
-        # Download options shared by both tabs.
+        # Download options shared by all tabs.
         opts = ttk.LabelFrame(main, text="Download options", padding=8)
         opts.grid(row=1, column=0, sticky="ew", **pad)
         opts.columnconfigure(1, weight=1)
@@ -417,14 +432,175 @@ class App:
         entry.bind("<Return>", lambda _e: self._start_post())
         self.post_button = ttk.Button(tab, text="Download post", command=self._start_post)
         self.post_button.grid(row=0, column=2)
-        ttk.Checkbutton(tab, text="Also add the post's account to the saved list (Batch tab)",
+        ttk.Checkbutton(tab, text="Also add the post's account to the saved list (From user tab)",
                         variable=self.add_owner).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
         hint = ttk.Label(tab, foreground="gray", justify="left", text=(
             "Paste a link to a post or reel, e.g. https://www.instagram.com/p/… "
-            "It's saved in the output folder under the account's name, so a Batch "
+            "It's saved in the output folder under the account's name, so a From user "
             "download of that account skips it. Public accounts only."))
         hint.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
         tab.bind("<Configure>", lambda e: _set_wrap(hint, e.width - 24))
+
+    def _build_files_tab(self, tab: ttk.Frame) -> None:
+        """Usernames and post links read from a .txt file, in two lists."""
+        tab.columnconfigure(0, weight=1, uniform="files")
+        tab.columnconfigure(1, weight=1, uniform="files")
+        tab.rowconfigure(1, weight=1)
+        picker = ttk.Frame(tab)
+        picker.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        picker.columnconfigure(1, weight=1)
+        ttk.Label(picker, text="Input file:").grid(row=0, column=0, padx=(0, 6))
+        entry = ttk.Entry(picker, textvariable=self.files_path)
+        entry.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+        entry.bind("<Return>", lambda _e: self._load_files())
+        ttk.Button(picker, text="Browse…", command=self._browse_files).grid(row=0, column=2, padx=(0, 6))
+        ttk.Button(picker, text="Load", command=self._load_files).grid(row=0, column=3)
+
+        self.files_users_box = ttk.LabelFrame(tab, text="Usernames", padding=4)
+        self.files_users_box.grid(row=1, column=0, sticky="nsew", padx=(0, 4))
+        self.files_users_tree = self._files_tree(self.files_users_box, "Username")
+        self.files_links_box = ttk.LabelFrame(tab, text="Direct links", padding=4)
+        self.files_links_box.grid(row=1, column=1, sticky="nsew", padx=(4, 0))
+        self.files_links_tree = self._files_tree(self.files_links_box, "Post link")
+
+        users_buttons = ttk.Frame(tab)
+        users_buttons.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.files_add_all_button = ttk.Button(users_buttons, text="Add all usernames",
+                                               command=lambda: self._add_files_users(False))
+        self.files_add_all_button.grid(row=0, column=0, padx=(0, 6))
+        self.files_add_sel_button = ttk.Button(users_buttons, text="Add selected",
+                                               command=lambda: self._add_files_users(True))
+        self.files_add_sel_button.grid(row=0, column=1)
+        links_buttons = ttk.Frame(tab)
+        links_buttons.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(6, 0))
+        self.files_dl_all_button = ttk.Button(links_buttons, text="Download all links",
+                                              command=lambda: self._start_files_links(False))
+        self.files_dl_all_button.grid(row=0, column=0, padx=(0, 6))
+        self.files_dl_sel_button = ttk.Button(links_buttons, text="Download selected",
+                                              command=lambda: self._start_files_links(True))
+        self.files_dl_sel_button.grid(row=0, column=1)
+        ttk.Checkbutton(tab, text="Also add each link's account to the saved list (From user tab)",
+                        variable=self.files_add_owner).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        hint = ttk.Label(tab, foreground="gray", justify="left", text=(
+            "A .txt file, one username or one https://www.instagram.com/p/… link per line. "
+            "No comments, CSV or JSON: other lines are skipped and listed in the log. "
+            "Usernames are only added to the saved list; links are downloaded now. Public accounts only."))
+        hint.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        tab.bind("<Configure>", lambda e: _set_wrap(hint, e.width - 24))
+
+    def _files_tree(self, box: ttk.LabelFrame, heading: str) -> ttk.Treeview:
+        """One of the From file tab's lists: a single column, several rows selectable."""
+        box.columnconfigure(0, weight=1)
+        box.rowconfigure(0, weight=1)
+        tree = ttk.Treeview(box, columns=("value",), show="headings", selectmode="extended", height=8)
+        tree.heading("value", text=heading, anchor="w")
+        tree.column("value", anchor="w", stretch=True)
+        tree.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(box, orient="vertical", command=tree.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        tree.configure(yscrollcommand=scroll.set)
+        return tree
+
+    # -------------------------------------------------------------- files tab
+
+    def _browse_files(self) -> None:
+        """Pick a .txt file and load it at once."""
+        chosen = filedialog.askopenfilename(
+            parent=self.root, title="Usernames and post links",
+            filetypes=[("Text files", "*.txt")], initialdir=str(paths.APP_DIR))
+        if chosen:
+            self.files_path.set(chosen)
+            self._load_files()
+
+    def _load_files(self) -> None:
+        """Read the chosen file (replacing both lists). A refused file changes nothing."""
+        path = self.files_path.get().strip()
+        if not path:
+            return
+        try:
+            text = read_entries_file(path)
+        except ValueError as e:
+            messagebox.showwarning(TITLE, str(e), parent=self.root)
+            return
+        self.files_users, self.files_links, rejected = parse_entries(text)
+        self._show_files_lists()
+        summary = (f"Loaded {Path(path).name}: {len(self.files_users)} username(s), "
+                   f"{len(self.files_links)} link(s).")
+        self._append_log(summary)
+        if rejected:
+            self._append_log(f"Skipped {len(rejected)} line(s) that are not a username or an "
+                             "https://www.instagram.com post link:")
+            for line in rejected[:REJECTED_SHOWN]:
+                self._append_log(f"  {line}")
+            if len(rejected) > REJECTED_SHOWN:
+                self._append_log(f"  … and {len(rejected) - REJECTED_SHOWN} more")
+        self.status.set(summary)
+
+    def _show_files_lists(self) -> None:
+        """Redraw both lists from files_users / files_links, keeping the selection.
+        Row ids are the username and the shortcode; the text is what's shown."""
+        listed = set(self.store.usernames())
+        for tree, rows in (
+            (self.files_users_tree, [(n, n + (ALREADY_LISTED if n in listed else "")) for n in self.files_users]),
+            (self.files_links_tree, [(code, url) for code, url in self.files_links]),
+        ):
+            selected = set(tree.selection())
+            tree.delete(*tree.get_children())
+            for iid, text in rows:
+                tree.insert("", "end", iid=iid, values=(text,))
+            tree.selection_set([iid for iid, _t in rows if iid in selected])
+        self.files_users_box.configure(text=f"Usernames ({len(self.files_users)})")
+        self.files_links_box.configure(text=f"Direct links ({len(self.files_links)})")
+
+    def _add_files_users(self, only_selected: bool) -> None:
+        """Add all (or the selected) usernames from the file to the saved list."""
+        if not self.files_users:
+            messagebox.showinfo(TITLE, NO_FILE_USERS, parent=self.root)
+            return
+        if only_selected:
+            chosen = set(self.files_users_tree.selection())
+            if not chosen:
+                messagebox.showinfo(TITLE, SELECT_FIRST, parent=self.root)
+                return
+            names = [n for n in self.files_users if n in chosen]
+        else:
+            names = list(self.files_users)
+        added = 0
+        try:
+            for name in names:
+                added += self.store.add_user(name)
+        except NewerStoreError as e:
+            self._block_for_newer_store(str(e))
+            return
+        except ValueError as e:  # parse_entries already checked it; just in case
+            messagebox.showwarning(TITLE, str(e), parent=self.root)
+            return
+        self._refresh_table()
+        self._show_files_lists()
+        text = f"Added {added} of {len(names)} username(s); {len(names) - added} already in the list."
+        self._append_log(text)
+        self.status.set(text)
+
+    def _start_files_links(self, only_selected: bool) -> None:
+        """Download all (or the selected) links from the file on the worker thread."""
+        if self.worker and self.worker.is_alive():
+            return  # already running
+        if not self.files_links:
+            messagebox.showinfo(TITLE, NO_FILE_LINKS, parent=self.root)
+            return
+        if only_selected:
+            chosen = set(self.files_links_tree.selection())
+            if not chosen:
+                messagebox.showinfo(TITLE, SELECT_LINKS_FIRST, parent=self.root)
+                return
+            codes = [c for c, _url in self.files_links if c in chosen]
+        else:
+            codes = [c for c, _url in self.files_links]
+        self._save_settings()
+        if not self._media_chosen() or not self._store_writable():
+            return
+        # Plain values for the worker: it must not read tkinter variables.
+        self._launch(self._run_links, codes, self.files_add_owner.get(), self.store.settings)
 
     # -------------------------------------------------------------- user list
 
@@ -669,7 +845,7 @@ class App:
         self._launch(self._run, only)
 
     def _start_post(self) -> None:
-        """Download the post in the Individual tab's link box on the worker thread."""
+        """Download the post in the From link tab's link box on the worker thread."""
         if self.worker and self.worker.is_alive():
             return  # already running
         try:
@@ -695,7 +871,8 @@ class App:
 
     def _set_running(self, running: bool) -> None:
         idle = "disabled" if self.store_blocked else "normal"
-        for button in (self.all_button, self.sel_button, self.post_button):
+        for button in (self.all_button, self.sel_button, self.post_button,
+                       self.files_dl_all_button, self.files_dl_sel_button):
             button.configure(state="disabled" if running else idle)
         self.stop_button.configure(state="normal" if running else "disabled")
 
@@ -723,6 +900,8 @@ class App:
         first_time = not self.store_blocked
         self.store_blocked = True
         for button in (self.all_button, self.sel_button, self.post_button,
+                       self.files_dl_all_button, self.files_dl_sel_button,
+                       self.files_add_all_button, self.files_add_sel_button,
                        self.add_button, self.remove_button, self.rescan_button):
             button.configure(state="disabled")
         self.status.set("Read-only: a newer InstaKeep updated the data file. Restart InstaKeep.")
@@ -803,6 +982,67 @@ class App:
         except Exception as e:  # noqa: BLE001 - every failure must reach the window
             known = cli.describe_error(e, "", post=shortcode)
             put(("done", known[1] if known else describe_unexpected(e), False))
+        finally:
+            lock.release()
+
+    def _run_links(self, shortcodes: list[str], add_owner: bool, settings: dict,
+                   build_loader=downloader.build_loader,
+                   download_post=downloader.download_single_post) -> None:
+        """Runs on the worker thread: download each post link in turn under one lock.
+
+        A link that fails for a known reason (deleted, private, ...) is logged and
+        the rest go on; a rate limit or Stop ends the run. Like _run(), every outcome
+        ends with one ("done", ...) message. Tests pass fake build_loader/download_post."""
+        put = self.messages.put
+        log = lambda text: put(("log", text))  # noqa: E731 - short local callback
+        lock = runner.RunLock(paths.LOCK_FILE)
+        try:
+            if not lock.acquire():
+                put(("done", "Another download (another window or a --run) is in progress. "
+                     "Try again later.", False))
+                return
+            loader = build_loader(
+                Path(settings["output_dir"]), videos=settings["videos"], images=settings["images"],
+                caption=settings["caption"],
+                metadata=settings["metadata"], quiet=True,
+                on_pause=lambda secs: put(("pause", secs)), should_stop=self.stop_requested.is_set,
+            )
+            loader.context.error = lambda msg, repeat_at_end=True: log(f"warning: {msg}")
+            total = len(shortcodes)
+            ok = new = 0
+            stopped = False
+            rate_limit = ""  # the message, if Instagram rate-limited the run
+            with awake.keep_awake(log=log):
+                for number, code in enumerate(shortcodes, 1):
+                    if self.stop_requested.is_set():
+                        stopped = True
+                        break
+                    log(f"Link {number}/{total}: {code}")
+                    try:
+                        result = download_post(loader, code, log=log, tags=settings["tags"],
+                                               folder_for=self.store.folder_of, on_saved=self._on_saved)
+                    except downloader.DownloadStopped:
+                        stopped = True
+                        break
+                    except Exception as e:  # noqa: BLE001 - unknown errors are re-raised below
+                        known = cli.describe_error(e, "", post=code)
+                        if known is None:
+                            raise
+                        log(f"error: {known[1]}")
+                        if known[0] == cli.EXIT_RATE_LIMIT:
+                            rate_limit = known[1]
+                            break
+                        continue
+                    put(("post_owner", result.owner, add_owner))
+                    ok += 1
+                    new += result.new_files
+            summary = f"{ok}/{total} link(s) OK, {new} new file(s)."
+            if rate_limit:
+                put(("done", f"{rate_limit} Stopped: {summary}", False))
+            else:
+                put(("done", f"{'Stopped' if stopped else 'Done'}. {summary}", True))
+        except Exception as e:  # noqa: BLE001 - every failure must reach the window
+            put(("done", describe_unexpected(e), False))
         finally:
             lock.release()
 
@@ -977,7 +1217,7 @@ class App:
     def _open_folder(self) -> None:
         """Open a user's folder (or the output folder) in the file manager.
 
-        Batch tab: the selected user's. Individual tab: the last downloaded post's account.
+        From user tab: the selected user's. From link tab: the last downloaded post's account.
         """
         # resolve(): an absolute path can't be mistaken for an option by open/xdg-open.
         base = Path(self.output_dir.get().strip() or paths.DEFAULT_OUTPUT).resolve()

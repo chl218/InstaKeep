@@ -26,13 +26,13 @@ After that, `python instakeep.py` uses `.venv` by itself. `python instakeep.py -
 
 ## The window
 
-The window has two tabs. **Batch** works on your saved list of profiles. **Individual** downloads one post from its link. The download options, **Stop**, **Open folder** and the log below the tabs are shared, and only one download runs at a time.
+The window has three tabs. **From user** works on your saved list of profiles. **From link** downloads one post from its link. **From file** reads usernames and post links from a .txt file. The download options, **Stop**, **Open folder** and the log below the tabs are shared, and only one download runs at a time.
 
 Files go to `InstaKeep/downloads/<username>/` unless you choose another folder. Your list and options are saved as you change them.
 
-### Batch
+### From user
 
-![The Batch tab: saved users with their last download, the estimate, the shared options and the log](docs/screenshot-batch.png)
+![The From user tab: saved users with their last download, the estimate, the shared options and the log](docs/screenshot-user.png)
 
 | Part | What it does |
 |------|--------------|
@@ -51,11 +51,17 @@ The estimate below the table says roughly how long a download will take, based o
 
 If a profile can't be found or is private, the others still download. If Instagram starts blocking requests, the rest wait for the next run, and those profiles go first next time. If a profile was renamed, InstaKeep tries to find the new name from the account's ID and keeps saving into the same folder.
 
-### Individual
+### From link
 
-![The Individual tab: a post link, the add-to-list checkbox and the log of one post's download](docs/screenshot-individual.png)
+![The From link tab: a post link, the add-to-list checkbox and the log of one post's download](docs/screenshot-link.png)
 
-Paste a post or reel link, such as `https://www.instagram.com/p/EXAMPLE_POST/`, and press **Download post** or Enter. The post goes into the account's folder with the same file names Batch uses, so Batch won't download it again. Tick **Also add the post's account to the saved list** to add the account to Batch.
+Paste a post or reel link, such as `https://www.instagram.com/p/EXAMPLE_POST/`, and press **Download post** or Enter. The post goes into the account's folder with the same file names From user uses, so From user won't download it again. Tick **Also add the post's account to the saved list** to add the account to the From user list.
+
+### From file
+
+![The From file tab: usernames and post links read from a .txt file, in two lists](docs/screenshot-file.png)
+
+Pick a `.txt` file with one username or one `https://www.instagram.com/p/…` link per line. Browse loads it at once. Usernames go in the left list and links in the right; every other line (comments, CSV or JSON) is skipped and listed in the log. The file may be up to 64 KB and 100 lines. **Add all usernames** / **Add selected** put usernames on the From user list. **Download all links** / **Download selected** download the posts. Tick **Also add each link's account** to add their accounts too.
 
 ### Locked screen
 

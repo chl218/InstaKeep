@@ -70,3 +70,78 @@ def test_parse_post_url(link):
 def test_parse_post_url_rejects_other_text(bad):
     with pytest.raises(ValueError):
         security.parse_post_url(bad)
+
+
+@pytest.mark.parametrize("text", [
+    "https://www.instagram.com/p/ABCDE12345/",
+    "https://instagram.com/reel/ABCDE12345",
+    "https://www.instagram.com/natgeo/p/ABCDE12345/?igsh=abc_1&utm=x",
+    "HTTPS://WWW.INSTAGRAM.COM/tv/ABCDE12345/#frag",
+])
+def test_strict_post_url_accepts(text):
+    assert security.parse_post_url_strict(text) == "ABCDE12345"
+
+
+@pytest.mark.parametrize("text", [
+    "http://www.instagram.com/p/ABCDE12345/",
+    "www.instagram.com/p/ABCDE12345/",
+    "https://m.instagram.com/p/ABCDE12345/",
+    "https://instagram.com@evil.com/p/ABCDE12345/",
+    "https://www.instagram.com.evil.com/p/ABCDE12345/",
+    "https://evilinstagram.com/p/ABCDE12345/",
+    "https://www.instagram.com:8080/p/ABCDE12345/",
+    "javascript:alert(1)",
+    "https://www.instagram.com/p/ABCDE12345/ extra",
+    "https://www.instagram.com/p/ABCDE12345/?a=b\\c",
+    "https://www.instagram.com/p/ABCDE12345/\x1b[2J",
+    "https://www.instagram.com/natgeo/",
+    "https://www.instagram.com/p/AB/",
+])
+def test_strict_post_url_rejects(text):
+    with pytest.raises(ValueError):
+        security.parse_post_url_strict(text)
+
+
+def _entries(tmp_path, data, name="list.txt"):
+    path = tmp_path / name
+    path.write_bytes(data)
+    return path
+
+
+def test_read_entries_file_accepts_text_with_bom_and_crlf(tmp_path):
+    path = _entries(tmp_path, b"\xef\xbb\xbfnatgeo\r\nnasa\r\n")
+    assert security.read_entries_file(path) == "natgeo\nnasa\n"
+
+
+@pytest.mark.parametrize("name,data", [
+    ("list.csv", b"nasa\n"),
+    ("list.json", b'["nasa"]'),
+    ("list.txt", b"x" * (security.ENTRIES_MAX_BYTES + 1)),
+    ("list.txt", b"nasa\n" * (security.ENTRIES_MAX_LINES + 1)),
+    ("list.txt", b"\xff\xfe\x00bad"),
+    ("list.txt", b"nasa\x00\n"),
+    ("list.txt", b"nasa\x1b[2J\n"),
+    ("list.txt", b"nasa\rnatgeo\n"),
+])
+def test_read_entries_file_refuses(tmp_path, name, data):
+    with pytest.raises(ValueError):
+        security.read_entries_file(_entries(tmp_path, data, name))
+
+
+def test_read_entries_file_refuses_missing_and_directory(tmp_path):
+    with pytest.raises(ValueError):
+        security.read_entries_file(tmp_path / "nope.txt")
+    (tmp_path / "dir.txt").mkdir()
+    with pytest.raises(ValueError):
+        security.read_entries_file(tmp_path / "dir.txt")
+
+
+def test_parse_entries_sorts_dedupes_and_rejects():
+    text = ("NatGeo\n@nasa\nnatgeo\n\n"
+            "https://www.instagram.com/p/ABCDE12345/\n"
+            "https://www.instagram.com/p/ABCDE12345/?igsh=x\n"
+            "# comment\na,b\n{\"u\": 1}\nhttp://www.instagram.com/p/ABCDE12345/\n")
+    users, links, rejected = security.parse_entries(text)
+    assert users == ["natgeo", "nasa"]
+    assert links == [("ABCDE12345", "https://www.instagram.com/p/ABCDE12345/")]
+    assert rejected == ["# comment", "a,b", '{"u": 1}', "http://www.instagram.com/p/ABCDE12345/"]

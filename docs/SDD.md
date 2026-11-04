@@ -72,7 +72,7 @@ flowchart LR
 | [`src/instakeep/estimate.py`](../src/instakeep/estimate.py) | Download-time estimates (pure functions over the store's records). |
 | [`src/instakeep/awake.py`](../src/instakeep/awake.py) | Keeps the computer awake and the screen on while a download runs. |
 | [`src/instakeep/preview.py`](../src/instakeep/preview.py) | Finds, loads and captions the newest downloaded image. |
-| [`src/instakeep/gui.py`](../src/instakeep/gui.py) | The tkinter window: Batch and Individual tabs, preview, log. |
+| [`src/instakeep/gui.py`](../src/instakeep/gui.py) | The tkinter window: From user, From link and From file tabs, preview, log. |
 | [`src/igdl/cli.py`](../src/igdl/cli.py) | The `igdl` command; maps errors to messages and exit codes. |
 | [`src/igdl/downloader.py`](../src/igdl/downloader.py) | Configures instaloader, reports rate-limit pauses, runs the per-profile loop, downloads a single post, looks up renamed accounts. |
 | [`src/igdl/tags.py`](../src/igdl/tags.py) | Writes caption hashtags into a JPEG's EXIF Tags. |
@@ -322,7 +322,7 @@ Both the system and the screen are kept on. On PCs with Modern Standby, the scre
 
 ## 7. Download-time estimates (`estimate.py`)
 
-The Batch tab estimates Download all and Download selected from each user's records. Users never downloaded are left out (nothing to go on) and counted separately. Defaults fill in what the records don't say yet (1.5 s per image, 8 s per video, 1.5 files per post, 25% videos when videos are on).
+The From user tab estimates Download all and Download selected from each user's records. Users never downloaded are left out (nothing to go on) and counted separately. Defaults fill in what the records don't say yet (1.5 s per image, 8 s per video, 1.5 files per post, 25% videos when videos are on).
 
 - Time per new post: files per post × (image share × seconds per image + video share × seconds per video). With images off, everything is video.
 - Time per post looked at: leftover time (total minus file time, pauses and per-user lookups) divided by posts looked at.
@@ -340,7 +340,7 @@ Everything here is a pure function: no files, no network.
 
 ```
 ┌──────────────────────────────────────────┬──────────────────────┐
-│ [Batch] [Individual]                     │ Latest image         │
+│ [From user] [From link] [From file]│ Latest image         │
 │  table · add/remove · limit · estimate   │  (photo)             │
 │  Download all / Download selected        │  caption · Open image│
 ├──────────────────────────────────────────┴──────────────────────┤
@@ -353,7 +353,7 @@ Everything here is a pure function: no files, no network.
 
 Only one download runs at a time. Option changes are saved as they're made (half-typed numbers are skipped).
 
-### 8.2 Batch tab
+### 8.2 From user tab
 
 User table. Last download, Result, Downloaded and Time describe the latest run; Time ticks while that user downloads. Longest is the slowest run; Total time, Images and Videos add up every run.
 
@@ -366,9 +366,20 @@ User table. Last download, Result, Downloaded and Time describe the latest run; 
 
 Controls. Add (validated, `@name` accepted, duplicates refused), Remove selected (asks first; files are kept), Full re-scan selected, Download all posts / Newest N, the estimate, Download all / Download selected.
 
-### 8.3 Individual tab
+### 8.3 From link tab
 
 A post link box, Download post, and "Also add the post's account to the saved list". Open folder on this tab opens the last post's account folder.
+
+### 8.3a From file tab
+
+Reads usernames and post links from a `.txt` file and shows them in two lists (Usernames, Direct links), both multi-select.
+
+- **Loading.** Browse loads at once; Load re-reads the same path. Each load replaces both lists, which are not saved between sessions.
+- **File checks** (`security.read_entries_file`): `.txt` only (no CSV or JSON), a regular file, at most 64 KB and 100 non-blank lines, strict UTF-8 (a BOM is fine), no control characters. Otherwise the whole file is refused with a warning and the lists stay as they were.
+- **Line checks** (`security.parse_entries`): a line is a link if `parse_post_url_strict` accepts it (https only; host exactly `instagram.com` or `www.instagram.com`; no userinfo, port or `m.`; the whole line must match), else a username (`@` allowed, lowercased), else rejected. Comments, CSV rows and JSON are rejected. Rejected lines are skipped, counted, and the first five shown in the log. Duplicates are dropped. Only the shortcode is used; the list shows the link rebuilt from it.
+- **Usernames** are only added to the saved list (Add all usernames / Add selected). Ones already saved show "(already listed)".
+- **Links** download one after another in one run (`_run_links`): one `RunLock`, one loader, one `keep_awake`. A link that fails for a known reason is logged and the rest go on; a rate limit or Stop ends the run. "Also add each link's account" works as on the From link tab. The "newest N posts" setting doesn't apply to a single post.
+- Rows stay after an action; results go to the log and status line.
 
 ### 8.4 Image preview
 

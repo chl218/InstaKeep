@@ -143,8 +143,143 @@ def test_download_selected_without_selection_shows_hint(app, dialogs):
     assert dialogs.texts("showinfo") == [gui.SELECT_FIRST]
 
 
-def test_tabs_are_batch_and_individual(app):
-    assert [app.tabs.tab(t, "text") for t in app.tabs.tabs()] == ["Batch", "Individual"]
+def test_tabs_are_batch_individual_and_files(app):
+    assert [app.tabs.tab(t, "text") for t in app.tabs.tabs()] == ["From user", "From link", "From file"]
+
+
+FILE_TEXT = (
+    "natgeo\n@NewUser\n\n"
+    "https://www.instagram.com/p/AAAAAAA/\n"
+    "https://www.instagram.com/reel/BBBBBBB/?igsh=x\n"
+    "# a comment\n"
+    "a,b,c\n"
+)
+
+
+def _load_file(app, tmp_path, text=FILE_TEXT):
+    path = tmp_path / "list.txt"
+    path.write_text(text, encoding="utf-8")
+    app.files_path.set(str(path))
+    app._load_files()
+
+
+def test_loading_a_file_fills_both_lists(app, tmp_path):
+    _load_file(app, tmp_path)
+    assert app.files_users == ["natgeo", "newuser"]
+    assert [c for c, _u in app.files_links] == ["AAAAAAA", "BBBBBBB"]
+    assert list(app.files_users_tree.get_children()) == ["natgeo", "newuser"]
+    assert "already listed" in app.files_users_tree.item("natgeo", "values")[0]
+    assert app.files_links_tree.item("BBBBBBB", "values")[0] == "https://www.instagram.com/p/BBBBBBB/"
+    log = app.log_box.get("1.0", "end")
+    assert "2 username(s), 2 link(s)" in log
+    assert "Skipped 2 line(s)" in log and "# a comment" in log
+
+
+def test_a_refused_file_changes_nothing(app, tmp_path, dialogs):
+    _load_file(app, tmp_path)
+    bad = tmp_path / "list.csv"
+    bad.write_text("nasa\n", encoding="utf-8")
+    app.files_path.set(str(bad))
+    app._load_files()
+    assert dialogs.texts("showwarning") and app.files_users == ["natgeo", "newuser"]
+
+
+def test_add_all_and_selected_usernames(app, store, tmp_path):
+    _load_file(app, tmp_path)
+    app.files_users_tree.selection_set(["newuser"])
+    app._add_files_users(True)
+    assert store.usernames() == ["natgeo", "nasa", "newuser"]
+    assert app.tree.exists("newuser")
+    assert "Added 1 of 1 username(s)" in app.log_box.get("1.0", "end")
+    app._add_files_users(False)
+    assert store.usernames() == ["natgeo", "nasa", "newuser"]
+    assert "Added 0 of 2 username(s); 2 already" in app.log_box.get("1.0", "end")
+
+
+def test_add_selected_without_selection_shows_hint(app, tmp_path, dialogs):
+    _load_file(app, tmp_path)
+    app.files_users_tree.selection_set([])
+    app._add_files_users(True)
+    assert dialogs.texts("showinfo") == [gui.SELECT_FIRST]
+
+
+def test_files_buttons_without_a_loaded_file(app, dialogs):
+    app._add_files_users(False)
+    app._start_files_links(False)
+    assert dialogs.texts("showinfo") == [gui.NO_FILE_USERS, gui.NO_FILE_LINKS]
+    assert app.worker is None
+
+
+def test_download_selected_links_without_selection(app, tmp_path, dialogs):
+    _load_file(app, tmp_path)
+    app.files_links_tree.selection_set([])
+    app._start_files_links(True)
+    assert dialogs.texts("showinfo") == [gui.SELECT_LINKS_FIRST]
+    assert app.worker is None
+
+
+def _run_links(app, codes, download_post, add_owner=False):
+    from types import SimpleNamespace
+
+    def build_loader(*_a, **_kw):
+        return SimpleNamespace(context=SimpleNamespace())
+
+    app._run_links(codes, add_owner, app.store.settings,
+                   build_loader=build_loader, download_post=download_post)
+    app._poll_messages()
+
+
+def test_links_download_in_order_and_can_add_accounts(app, store):
+    from igdl import downloader
+    seen = []
+
+    def fake(loader, code, log, tags, **kw):
+        seen.append(code)
+        return downloader.PostResult("acct_" + code.lower(), True, 2)
+
+    _run_links(app, ["AAAAAAA", "BBBBBBB"], fake, add_owner=True)
+    assert seen == ["AAAAAAA", "BBBBBBB"]
+    assert "acct_aaaaaaa" in store.usernames() and "acct_bbbbbbb" in store.usernames()
+    assert "Done. 2/2 link(s) OK, 4 new file(s)." in app.log_box.get("1.0", "end")
+    assert str(app.files_dl_all_button.cget("state")) == "normal"
+
+
+def test_a_missing_link_does_not_stop_the_others(app, dialogs):
+    from igdl import downloader
+    from instaloader.exceptions import BadResponseException
+
+    def fake(loader, code, log, tags, **kw):
+        if code == "AAAAAAA":
+            raise BadResponseException("gone")
+        return downloader.PostResult("nasa", True, 1)
+
+    _run_links(app, ["AAAAAAA", "BBBBBBB"], fake)
+    log = app.log_box.get("1.0", "end")
+    assert "post 'AAAAAAA' couldn't be loaded" in log
+    assert "Done. 1/2 link(s) OK, 1 new file(s)." in log
+    assert dialogs.texts("showerror") == []
+
+
+def test_a_rate_limit_ends_the_link_run(app, dialogs):
+    from instaloader.exceptions import TooManyRequestsException
+    seen = []
+
+    def fake(loader, code, log, tags, **kw):
+        seen.append(code)
+        raise TooManyRequestsException("429")
+
+    _run_links(app, ["AAAAAAA", "BBBBBBB"], fake)
+    assert seen == ["AAAAAAA"]
+    assert dialogs.texts("showerror") and "0/2 link(s) OK" in dialogs.texts("showerror")[0]
+
+
+def test_files_buttons_are_locked_for_a_newer_data_file(app, store):
+    _make_file_newer(store)
+    app._start_files_links(False)  # nothing loaded: returns before touching the store
+    app._block_for_newer_store("newer")
+    for button in (app.files_add_all_button, app.files_add_sel_button,
+                   app.files_dl_all_button, app.files_dl_sel_button):
+        assert str(button.cget("state")) == "disabled"
 
 
 def test_bad_post_link_shows_a_warning(app, dialogs):

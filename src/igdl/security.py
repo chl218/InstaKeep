@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import sys
 import traceback
+from pathlib import Path
 
 # Instagram usernames: letters, digits, "." and "_", up to 30 chars.
 # Anything else (slashes, "..") is rejected, which also rules out path tricks
@@ -45,6 +46,103 @@ def parse_post_url(text: str) -> str:
         raise ValueError("Not an Instagram post link. It should look like "
                          "https://www.instagram.com/p/... or https://www.instagram.com/reel/...")
     return match.group(1)
+
+
+# Stricter than _POST_URL_RE, for links read from a file (the Files tab): https only,
+# host exactly instagram.com or www.instagram.com (no "m.", userinfo, port or
+# look-alike host), and an optional query or fragment from a small safe character set.
+# The whole line must match, so trailing text rejects it.
+_STRICT_POST_URL_RE = re.compile(
+    r"https://(?:www\.)?instagram\.com/(?:[A-Za-z0-9._]{1,30}/)?"
+    r"(?:p|reels?|tv)/([A-Za-z0-9_-]{5,64})/?(?:[?#][A-Za-z0-9_=&%.\-]*)?",
+    re.IGNORECASE,
+)
+
+ENTRIES_MAX_BYTES = 64 * 1024  # an input file bigger than this is refused
+ENTRIES_MAX_LINES = 100        # so is one with more non-blank lines than this
+ENTRIES_REJECT_SHOWN = 80      # rejected lines are cut to this many characters
+
+
+def parse_post_url_strict(text: str) -> str:
+    """Like parse_post_url, but only https://instagram.com or https://www.instagram.com.
+
+    'https://www.instagram.com/p/EXAMPLE_POST/?igsh=x' -> 'EXAMPLE_POST'.
+    Raises ValueError for anything else (http, no scheme, m.instagram.com,
+    instagram.com@evil.com, instagram.com.evil.com, a port, trailing text...).
+    """
+    match = _STRICT_POST_URL_RE.fullmatch(text.strip())
+    if not match:
+        raise ValueError("Not an https://www.instagram.com post link.")
+    return match.group(1)
+
+
+def post_url(shortcode: str) -> str:
+    """The link shown for a shortcode: rebuilt, never the text that was pasted."""
+    return f"https://www.instagram.com/p/{shortcode}/"
+
+
+def read_entries_file(path: str | Path) -> str:
+    """The text of an input file of usernames and post links, after safety checks.
+
+    Raises ValueError (with a message fit for the user) unless it is a regular
+    .txt file of at most ENTRIES_MAX_BYTES bytes, valid UTF-8 (a BOM is fine),
+    with no control characters and at most ENTRIES_MAX_LINES non-blank lines.
+    """
+    path = Path(path)
+    if path.suffix.lower() != ".txt":
+        raise ValueError("Only plain .txt files are accepted (not CSV, JSON or other formats).")
+    try:
+        if not path.is_file():
+            raise ValueError("That is not a file.")
+        with path.open("rb") as f:
+            raw = f.read(ENTRIES_MAX_BYTES + 1)
+    except OSError as e:
+        raise ValueError(f"Couldn't read the file: {e.strerror or type(e).__name__}.") from e
+    if len(raw) > ENTRIES_MAX_BYTES:
+        raise ValueError(f"The file is bigger than {ENTRIES_MAX_BYTES // 1024} KB.")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as e:
+        raise ValueError("The file isn't valid UTF-8 text.") from e
+    text = text.replace("\r\n", "\n")
+    if strip_control(text) != text:
+        raise ValueError("The file contains control characters.")
+    if sum(1 for line in text.split("\n") if line.strip()) > ENTRIES_MAX_LINES:
+        raise ValueError(f"The file has more than {ENTRIES_MAX_LINES} lines.")
+    return text
+
+
+def parse_entries(text: str) -> tuple[list[str], list[tuple[str, str]], list[str]]:
+    """Sort the lines of an input file into (usernames, links, rejected).
+
+    A line is a link (strict https post link) or a username (normalized to
+    lowercase, a leading "@" allowed); anything else, such as a comment, a CSV
+    row or JSON, is rejected. Blank lines are ignored and duplicates dropped.
+    links are (shortcode, rebuilt URL); rejected lines are cut to a short length.
+    """
+    usernames: list[str] = []
+    links: list[tuple[str, str]] = []
+    rejected: list[str] = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            code = parse_post_url_strict(line)
+        except ValueError:
+            pass
+        else:
+            if all(code != c for c, _url in links):
+                links.append((code, post_url(code)))
+            continue
+        try:
+            name = normalize_username(line)
+        except ValueError:
+            rejected.append(line[:ENTRIES_REJECT_SHOWN])
+            continue
+        if name not in usernames:
+            usernames.append(name)
+    return usernames, links, rejected
 
 
 def is_valid_username(name: str) -> bool:

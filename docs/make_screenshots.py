@@ -1,4 +1,4 @@
-"""Make the README screenshots of the window's two tabs (Windows only).
+"""Make the README screenshots of the window's three tabs (Windows only).
 
 The window shows stub data: made-up usernames, a made-up post link and sample log
 lines. Nothing is downloaded and the real data/ and downloads/ folders aren't
@@ -7,7 +7,7 @@ and captured with PrintWindow, so it never appears on the desktop.
 
     .venv\\Scripts\\python docs\\make_screenshots.py
 
-Writes docs/screenshot-batch.png and docs/screenshot-individual.png.
+Writes docs/screenshot-user.png, screenshot-link.png and screenshot-file.png.
 """
 
 from __future__ import annotations
@@ -37,6 +37,12 @@ STUB_USERS = [
 NEW_USER = "just_added"  # in the list but never downloaded: left out of the estimate
 STUB_LINK = "https://www.instagram.com/p/EXAMPLE_POST/"
 STUB_OUTPUT = r"D:\Pictures\InstaKeep"
+STUB_FILE_TEXT = "\n".join([
+    "example.user", "sample_account", "@new_account",
+    "https://www.instagram.com/p/EXAMPLE_POST/",
+    "https://www.instagram.com/reel/EXAMPLE_REEL/",
+    "# not allowed",
+])
 
 
 def stub_store(folder: Path) -> Store:
@@ -112,7 +118,7 @@ def main() -> int:
         root.attributes("-toolwindow", False)  # restore the normal title bar for the picture
         root.geometry("+0+0")
 
-        def batch() -> None:
+        def user() -> None:
             app.tree.selection_set(["example.user"])
             for line in ("=== [1/3] @example.user (newest 5) ===",
                          "Downloading 5 image post(s) from @example.user",
@@ -122,7 +128,7 @@ def main() -> int:
                 app._append_log(line)
             app.status.set("Done. 3/3 user(s) OK, 8 new file(s).")
 
-        def individual() -> None:
+        def link() -> None:
             app.tabs.select(1)
             app._clear_log()
             app.post_link.set(STUB_LINK)
@@ -134,10 +140,22 @@ def main() -> int:
                 app._append_log(line)
             app.status.set("Done. 3 new file(s) from @example.user.")
 
+        def from_file() -> None:
+            app.tabs.select(2)
+            app._clear_log()
+            listed = Path(tmp) / "accounts.txt"
+            listed.write_text(STUB_FILE_TEXT, encoding="utf-8")
+            app.files_path.set(str(listed))
+            app._load_files()
+            app.files_path.set(r"D:\Lists\accounts.txt")  # not the temporary folder
+            app.files_users_tree.selection_set(["new_account"])
+            app.files_links_tree.selection_set(["EXAMPLE_POST"])
+
         # One step at a time, each scheduled by the one before, with time for Tk to
         # paint before each capture (PrintWindow copies what has been drawn).
-        steps = [batch, lambda: capture(root, DOCS / "screenshot-batch.png"),
-                 individual, lambda: capture(root, DOCS / "screenshot-individual.png"),
+        steps = [user, lambda: capture(root, DOCS / "screenshot-user.png"),
+                 link, lambda: capture(root, DOCS / "screenshot-link.png"),
+                 from_file, lambda: capture(root, DOCS / "screenshot-file.png"),
                  root.destroy]
 
         def run_next() -> None:
@@ -147,7 +165,7 @@ def main() -> int:
 
         root.after(300, run_next)
         root.mainloop()
-    print("Wrote docs/screenshot-batch.png and docs/screenshot-individual.png")
+    print("Wrote docs/screenshot-user.png, screenshot-link.png and screenshot-file.png")
     return 0
 
 
