@@ -8,6 +8,8 @@ The [design document](docs/SDD.md) explains how it works inside.
 
 ## Start
 
+Download `InstaKeep-<version>.zip` from the [latest release](https://github.com/chl218/InstaKeep/releases/latest) and unzip it, or clone the repository. Then:
+
 ```powershell
 cd InstaKeep
 python instakeep.py      # Windows (not python3, which opens the Microsoft Store)
@@ -136,4 +138,7 @@ igdl natgeo -o D:\ig --metadata       # another folder, plus post data
 ```powershell
 .venv\Scripts\pip install -e .[dev]
 .venv\Scripts\python -m pytest
+.venv\Scripts\ruff check .
 ```
+
+To release: set the new version in `pyproject.toml`, `src/igdl/__init__.py` and `src/instakeep/__init__.py`, commit to `main`, then push a tag (`git tag v0.2.0 && git push origin v0.2.0`). GitHub Actions runs the checks and publishes the release with its zip.

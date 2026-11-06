@@ -675,7 +675,7 @@ class App:
             # A click on a line still selects the row underneath.
             line.bind("<Button-1>", self._click_through)
             self.grid_frames.append(line)
-        for line, (x, y, w, h) in zip(self.grid_frames, lines):
+        for line, (x, y, w, h) in zip(self.grid_frames, lines, strict=False):
             line.place(x=x, y=y, width=w, height=h)
         for line in self.grid_frames[len(lines):]:
             line.place_forget()

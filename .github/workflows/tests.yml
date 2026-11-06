@@ -1,5 +1,6 @@
-# Runs the whole pytest suite on every pull request and on every push to main
-# (which includes merged pull requests). Tests never touch the network.
+# Runs Ruff and the whole pytest suite on every pull request and on every push
+# to main (which includes merged pull requests). Tests never touch the network.
+# release.yml also calls this workflow before it publishes a release.
 name: Tests
 
 on:
@@ -7,16 +8,31 @@ on:
   push:
     branches: [main]
   workflow_dispatch:   # also allow a manual run from the Actions tab
+  workflow_call:       # release.yml runs the same checks
 
 permissions:
   contents: read
 
 # A newer push to the same PR or branch cancels the run still going for it.
+# github.workflow is the caller's name when release.yml calls this, so a
+# release never cancels (or waits on) a normal run.
 concurrency:
-  group: tests-${{ github.event.pull_request.number || github.ref }}
+  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      # Pinned so a new Ruff release can't turn main red by itself.
+      - run: python -m pip install ruff==0.17.4
+      - run: ruff check --output-format=github .
+
   pytest:
     name: ${{ matrix.os }} / Python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}

@@ -62,18 +62,18 @@ def test_selecting_rows_refreshes_the_estimate(app):
 
 def test_table_shows_times_and_counts(app):
     assert app.tree["columns"] == tuple(gui.COLUMNS)
-    row = dict(zip(gui.COLUMNS, app.tree.item("natgeo")["values"]))
+    row = dict(zip(gui.COLUMNS, app.tree.item("natgeo")["values"], strict=True))
     assert row["user"] == "natgeo" and row["result"] == "ok" and row["count"] == 6
     assert (row["time"], row["longest"], row["total"]) == ("30 s", "30 s", "30 s")
     assert (row["images"], row["videos"]) == (6, 0)
-    never = dict(zip(gui.COLUMNS, app.tree.item("nasa")["values"]))
+    never = dict(zip(gui.COLUMNS, app.tree.item("nasa")["values"], strict=True))
     assert never["last"] == "never" and never["result"] == never["count"] == ""
 
 
 def test_columns_fit_their_text(app):
     cell_font = tkfont.nametofont("TkDefaultFont")
     for iid in app.tree.get_children():
-        for key, value in zip(gui.COLUMNS, app.tree.item(iid)["values"]):
+        for key, value in zip(gui.COLUMNS, app.tree.item(iid)["values"], strict=True):
             assert cell_font.measure(str(value)) < app.tree.column(key, "width")
 
 

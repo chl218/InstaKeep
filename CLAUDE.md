@@ -19,9 +19,10 @@ python instakeep.py --list | --add NAME... | --remove NAME...
 .venv\Scripts\python -m pytest              # all tests (pythonpath=src is set in pyproject.toml)
 .venv\Scripts\python -m pytest tests/test_store.py::test_remove
 .venv\Scripts\python -m pytest -k rate_limit
+.venv\Scripts\ruff check .               # lint (config in pyproject.toml)
 ```
 
-CI (`.github/workflows/tests.yml`) runs the whole suite on every pull request and every push to `main`, on Windows, Linux (under `xvfb`) and macOS with Python 3.10 and 3.14. There is no linter or formatter configured. Tests never touch the network: Instagram access is replaced with fakes. Tests are headless: `tests/conftest.py` hides every Tk window, records message boxes and file dialogs in the `dialogs` fixture instead of showing them, and points `instakeep.paths` (data, logs, lock, downloads) at the temp folder. Window tests in `tests/test_gui.py` share one session Tk root and give each test its own hidden `Toplevel`. Creating many `tk.Tk()` roots in one process fails on Windows.
+CI (`.github/workflows/tests.yml`) runs Ruff and the whole suite on every pull request and every push to `main`, on Windows, Linux (under `xvfb`) and macOS with Python 3.10 and 3.14. Ruff is pinned in that workflow; there is no formatter. Pushing a `v*.*.*` tag runs `.github/workflows/release.yml`: it checks the tag matches `pyproject.toml`, reruns the same checks, and publishes a GitHub Release with `InstaKeep-<version>.zip` (`git archive`; `.gitattributes` excludes developer files). `tests/test_project.py` checks that the three version strings match and that the pre-setup modules import only the standard library. Tests never touch the network: Instagram access is replaced with fakes. Tests are headless: `tests/conftest.py` hides every Tk window, records message boxes and file dialogs in the `dialogs` fixture instead of showing them, and points `instakeep.paths` (data, logs, lock, downloads) at the temp folder. Window tests in `tests/test_gui.py` share one session Tk root and give each test its own hidden `Toplevel`. Creating many `tk.Tk()` roots in one process fails on Windows.
 
 ## Architecture
 

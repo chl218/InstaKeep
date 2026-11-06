@@ -1,0 +1,57 @@
+# Publishes a GitHub Release when a version tag is pushed:
+#   git tag v0.2.0 && git push origin v0.2.0
+# The tag must match the version in pyproject.toml, and Ruff + the full test
+# matrix must pass first. The release gets InstaKeep-<version>.zip, the source
+# without the files .gitattributes marks export-ignore.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check-version:
+    name: Tag matches pyproject.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare versions
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          echo "tag $tag, pyproject.toml $version"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::Tag v$tag doesn't match version $version in pyproject.toml"
+            exit 1
+          fi
+
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  release:
+    name: Publish release
+    needs: [check-version, tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the release and upload the zip
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build zip
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          git archive --format=zip --prefix="InstaKeep-$version/" -o "InstaKeep-$version.zip" "$GITHUB_REF_NAME"
+          unzip -l "InstaKeep-$version.zip"
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" "InstaKeep-$version.zip" \
+            --verify-tag --generate-notes --title "InstaKeep $version"

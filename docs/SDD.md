@@ -470,11 +470,12 @@ Usernames, captions, error text and anything else from Instagram are untrusted.
 - Post links are reduced to their shortcode; nothing else from the pasted text reaches a request or a file name.
 - `subprocess` is only called with argument lists, never `shell=True`. "Open folder" and "Open image" check the path is a folder or an image file first (`os.startfile` on a program would run it).
 
-## 12. Testing and CI
+## 12. Testing, CI and releases
 
 ```powershell
 .venv\Scripts\pip install -e .[dev]
 .venv\Scripts\python -m pytest
+.venv\Scripts\ruff check .
 ```
 
 - Tests never touch the network. Instagram access is replaced with fakes through the injectable parameters or `monkeypatch`.
@@ -482,8 +483,11 @@ Usernames, captions, error text and anything else from Instagram are untrusted.
 - A hidden window reports no row positions, so grid-line tests use made-up positions.
 - EXIF tests use real JPEGs built with piexif; preview tests use real JPEGs built with Pillow.
 - Behavior changes come with a test.
+- `tests/test_project.py` checks two project rules: the three version strings (`pyproject.toml`, `igdl.__version__`, `instakeep.__version__`) match, and the pre-setup modules (§3) import only the standard library, in a fresh `python -I`.
 
-CI (`.github/workflows/tests.yml`) runs the whole suite on every pull request and every push to `main`, on Windows, Linux (under `xvfb`) and macOS with Python 3.10 and 3.14. A newer push cancels the run still going for it. There's no linter or formatter.
+CI (`.github/workflows/tests.yml`) runs Ruff and the whole suite on every pull request and every push to `main`, on Windows, Linux (under `xvfb`) and macOS with Python 3.10 and 3.14. A newer push cancels the run still going for it. Ruff (configured in `pyproject.toml`: its default rules plus bugbear) is pinned in CI; there's no formatter.
+
+Releases (`.github/workflows/release.yml`) start from a pushed `v*.*.*` tag. The tag must match the `pyproject.toml` version, and the same Ruff + test matrix must pass. Then the workflow publishes a GitHub Release with generated notes and `InstaKeep-<version>.zip`, made by `git archive`. `.gitattributes` leaves developer files (`.github/`, `CLAUDE.md`, `memory/`, `docs/make_screenshots.py`) out of the zip. The zip is the whole install: users unzip it and run `python instakeep.py`, and the first start builds `.venv` as usual (§3).
 
 ## 13. Design decisions
 

@@ -1,0 +1,7 @@
+# Left out of release zips (git archive) and GitHub's "Source code" downloads:
+# CI config and notes for developers and Claude, not needed to run InstaKeep.
+.github/                export-ignore
+.gitattributes          export-ignore
+CLAUDE.md               export-ignore
+memory/                 export-ignore
+docs/make_screenshots.py export-ignore
