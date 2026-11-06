@@ -383,7 +383,7 @@ class App:
         entry.focus_set()
         self.add_button = ttk.Button(edit, text="Add", command=self._add_user)
         self.add_button.grid(row=0, column=2, padx=(0, 6))
-        self.remove_button = ttk.Button(edit, text="Remove selected", command=self._remove_selected)
+        self.remove_button = ttk.Button(edit, text="Remove Selected", command=self._remove_selected)
         self.remove_button.grid(row=0, column=3, padx=(0, 6))
         self.rescan_button = ttk.Button(edit, text="Full re-scan selected", command=self._rescan_selected)
         self.rescan_button.grid(row=0, column=4)
@@ -421,9 +421,9 @@ class App:
         # Run buttons.
         buttons = ttk.Frame(main)
         buttons.grid(row=4, column=0, sticky="w", **pad)
-        self.all_button = ttk.Button(buttons, text="Download all", command=lambda: self._start(None))
+        self.all_button = ttk.Button(buttons, text="Download All Users", command=lambda: self._start(None))
         self.all_button.grid(row=0, column=0, padx=(0, 6))
-        self.sel_button = ttk.Button(buttons, text="Download selected", command=self._start_selected)
+        self.sel_button = ttk.Button(buttons, text="Download Selected User", command=self._start_selected)
         self.sel_button.grid(row=0, column=1)
 
     def _build_individual_tab(self, tab: ttk.Frame) -> None:
@@ -478,7 +478,7 @@ class App:
         self.files_dl_all_button = ttk.Button(links_buttons, text="Download All Links",
                                               command=lambda: self._start_files_links(False))
         self.files_dl_all_button.grid(row=0, column=0, padx=(0, 6))
-        self.files_dl_sel_button = ttk.Button(links_buttons, text="Download Selected",
+        self.files_dl_sel_button = ttk.Button(links_buttons, text="Download Selected User",
                                               command=lambda: self._start_files_links(True))
         self.files_dl_sel_button.grid(row=0, column=1)
         ttk.Checkbutton(tab, text="Also add each link's account to the saved list (From user tab)",
