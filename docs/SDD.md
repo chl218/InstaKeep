@@ -1,6 +1,6 @@
 # InstaKeep Software Design Document
 
-This document describes how InstaKeep works inside: its structure, its data, its rules, and why it's built the way it is. For how to use it, see the [README](../README.md).
+This document describes how InstaKeep works inside and why it's built that way, plus how to develop and release it (§12). For how to use it, see the [README](../README.md).
 
 ## 1. Purpose and scope
 
@@ -72,7 +72,7 @@ flowchart LR
 | [`src/instakeep/estimate.py`](../src/instakeep/estimate.py) | Download-time estimates (pure functions over the store's records). |
 | [`src/instakeep/awake.py`](../src/instakeep/awake.py) | Keeps the computer awake and the screen on while a download runs. |
 | [`src/instakeep/preview.py`](../src/instakeep/preview.py) | Finds, loads and captions the newest downloaded image. |
-| [`src/instakeep/gui.py`](../src/instakeep/gui.py) | The tkinter window: From user, From link and From file tabs, preview, log. |
+| [`src/instakeep/gui.py`](../src/instakeep/gui.py) | The tkinter window: From User, From Link and From File tabs, preview, log. |
 | [`src/igdl/cli.py`](../src/igdl/cli.py) | The `igdl` command; maps errors to messages and exit codes. |
 | [`src/igdl/downloader.py`](../src/igdl/downloader.py) | Configures instaloader, reports rate-limit pauses, runs the per-profile loop, downloads a single post, looks up renamed accounts. |
 | [`src/igdl/tags.py`](../src/igdl/tags.py) | Writes caption hashtags into a JPEG's EXIF Tags. |
@@ -89,7 +89,7 @@ Runtime dependencies are `instaloader` (`>=4.14,<5`), `piexif` and `pillow`. The
 
 Adding a runtime dependency means updating `pyproject.toml`, `bootstrap.REQUIRED_MODULES` and the setup table in the README. Prefer the standard library.
 
-`igdl.__version__` must stay in sync with `pyproject.toml`.
+The version is written in three places, `pyproject.toml`, `igdl.__version__` and `instakeep.__version__`, and they must match (a test checks, §12).
 
 ## 3. Startup and setup
 
@@ -228,7 +228,7 @@ Without an early stop, "all posts" pages through the entire profile on every run
 
 `download_user(stop_at_known=True)` ends the loop after `KNOWN_STREAK` (3) posts in a row that already had media on disk, not counting the first `MAX_PINNED` posts (which can be old pinned posts). It waits for three in a row so that a gap left by an interrupted run isn't taken as the end. The runner only asks for this once the user has had a full pass (`full_scan_done`). It's never used with a limit.
 
-`DownloadStats.complete` is true only when every post was looked at: no limit, no early stop, no error, no Stop. Only such a run sets `full_scan_done`, and only such a run may stand in for a missing post count (§7). "Full re-scan" (window button, `--rescan`, `Store.request_full_scan()`) clears `full_scan_done`, so the next "all posts" run looks at every post again.
+`DownloadStats.complete` is true only when every post was looked at: no limit, no early stop, no error, no Stop. Only such a run sets `full_scan_done`, and only such a run may stand in for a missing post count (§7). "Full re-scan" (the Full re-scan selected button, `--rescan`, `Store.request_full_scan()`) clears `full_scan_done`, so the next "all posts" run looks at every post again.
 
 ### 5.5 Single post
 
@@ -283,7 +283,7 @@ It takes injectable `build_loader`, `download_user`, `describe_error` and `looku
 
 ### 6.2 Run order
 
-A full run (no selection) starts with whoever has gone longest without a successful download (`last_ok`; never-downloaded first), with ties in list order. Without this, a rate limit that always strikes around user 15 means users 16 and up never download. A failed or rate-limited run doesn't set `last_ok`, so that user keeps their place in line. "Download selected" keeps the list order.
+A full run (no selection) starts with whoever has gone longest without a successful download (`last_ok`; never-downloaded first), with ties in list order. Without this, a rate limit that always strikes around user 15 means users 16 and up never download. A failed or rate-limited run doesn't set `last_ok`, so that user keeps their place in line. "Download Selected User" keeps the list order.
 
 ### 6.3 Failures
 
@@ -302,7 +302,7 @@ When a user isn't found and has a saved `userid`, `_follow_rename()` looks the I
 
 ### 6.5 Run lock
 
-`RunLock` (`data/run.lock`) holds the PID of the process downloading. It's created with `O_EXCL`, so of two processes starting at once only one wins. The window (both tabs) and `--run` all take it; whichever starts second gives up and says so (`--run` exits 5).
+`RunLock` (`data/run.lock`) holds the PID of the process downloading. It's created with `O_EXCL`, so of two processes starting at once only one wins. The window (every tab) and `--run` all take it; whichever starts second gives up and says so (`--run` exits 5).
 
 While held, a heartbeat thread touches the file every 60 seconds. A lock is stale, and taken over, when its process is gone or it hasn't been touched for an hour. That way a run of any length keeps its lock (a big "all posts" run with long pauses can pass 24 hours), and a crashed one frees it within the hour even if Windows reused its PID.
 
@@ -322,7 +322,7 @@ Both the system and the screen are kept on. On PCs with Modern Standby, the scre
 
 ## 7. Download-time estimates (`estimate.py`)
 
-The From user tab estimates Download all and Download selected from each user's records. Users never downloaded are left out (nothing to go on) and counted separately. Defaults fill in what the records don't say yet (1.5 s per image, 8 s per video, 1.5 files per post, 25% videos when videos are on).
+The From User tab estimates Download All Users and Download Selected User from each user's records. Users never downloaded are left out (nothing to go on) and counted separately. Defaults fill in what the records don't say yet (1.5 s per image, 8 s per video, 1.5 files per post, 25% videos when videos are on).
 
 - Time per new post: files per post × (image share × seconds per image + video share × seconds per video). With images off, everything is video.
 - Time per post looked at: leftover time (total minus file time, pauses and per-user lookups) divided by posts looked at.
@@ -340,20 +340,20 @@ Everything here is a pure function: no files, no network.
 
 ```
 ┌──────────────────────────────────────────┬──────────────────────┐
-│ [From user] [From link] [From file]│ Latest image         │
+│ [From User] [From Link] [From File]      │ Latest Image         │
 │  table · add/remove · limit · estimate   │  (photo)             │
-│  Download all / Download selected        │  caption · Open image│
+│  Download All Users / Selected User      │  caption · Open Image│
 ├──────────────────────────────────────────┴──────────────────────┤
-│ Download options: Images Videos Caption #tags Metadata · folder  │
-│ [Stop] [Open folder]                             [x] Show preview│
-│ log                                                              │
-│ status line                                                      │
-└──────────────────────────────────────────────────────────────────┘
+│ Download Options: Images Videos Caption #tags Metadata · folder │
+│ [Stop] [Open Folder]                           [x] Show Preview │
+│ log                                                             │
+│ status line                                                     │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 Only one download runs at a time. Option changes are saved as they're made (half-typed numbers are skipped).
 
-### 8.2 From user tab
+### 8.2 From User tab
 
 User table. Last download, Result, Downloaded and Time describe the latest run; Time ticks while that user downloads. Longest is the slowest run; Total time, Images and Videos add up every run.
 
@@ -364,24 +364,24 @@ User table. Last download, Result, Downloaded and Time describe the latest run; 
 - Every other row is light blue (`STRIPE_COLOR`), counted in display order so the stripes stay even after sorting.
 - Row height comes from the font's line height, since ttk's fixed default cuts off text on high-DPI screens.
 
-Controls. Add (validated, `@name` accepted, duplicates refused), Remove selected (asks first; files are kept), Full re-scan selected, Download all posts / Newest N, the estimate, Download all / Download selected.
+Controls. Add (validated, `@name` accepted, duplicates refused), Remove Selected (asks first; files are kept), Full re-scan selected, Download all posts / Newest N, the estimate, Download All Users / Download Selected User.
 
-### 8.3 From link tab
+### 8.3 From Link tab
 
-A post link box, Download post, and "Also add the post's account to the saved list". Open folder on this tab opens the last post's account folder.
+A post link box, Download post, and "Also add the post's account to the saved list". Open Folder on this tab opens the last post's account folder.
 
-### 8.3a From file tab
+### 8.4 From File tab
 
 Reads usernames and post links from a `.txt` file and shows them in two lists (Usernames, Direct links), both multi-select.
 
-- **Loading.** Browse loads at once; Load re-reads the same path. Each load replaces both lists, which are not saved between sessions.
-- **File checks** (`security.read_entries_file`): `.txt` only (no CSV or JSON), a regular file, at most 64 KB and 100 non-blank lines, strict UTF-8 (a BOM is fine), no control characters. Otherwise the whole file is refused with a warning and the lists stay as they were.
-- **Line checks** (`security.parse_entries`): a line is a link if `parse_post_url_strict` accepts it (https only; host exactly `instagram.com` or `www.instagram.com`; no userinfo, port or `m.`; the whole line must match), else a username (`@` allowed, lowercased), else rejected. Comments, CSV rows and JSON are rejected. Rejected lines are skipped, counted, and the first five shown in the log. Duplicates are dropped. Only the shortcode is used; the list shows the link rebuilt from it.
-- **Usernames** are only added to the saved list (Add all usernames / Add selected). Ones already saved show "(already listed)".
-- **Links** download one after another in one run (`_run_links`): one `RunLock`, one loader, one `keep_awake`. A link that fails for a known reason is logged and the rest go on; a rate limit or Stop ends the run. "Also add each link's account" works as on the From link tab. The "newest N posts" setting doesn't apply to a single post.
+- Browse loads at once; Load re-reads the same path. Each load replaces both lists, which are not saved between sessions.
+- The file is checked first (`security.read_entries_file`): `.txt` only (no CSV or JSON), a regular file, at most 64 KB and 100 non-blank lines, strict UTF-8 (a BOM is fine), no control characters. Otherwise the whole file is refused with a warning and the lists stay as they were.
+- Then each line (`security.parse_entries`): a line is a link if `parse_post_url_strict` accepts it (https only; host exactly `instagram.com` or `www.instagram.com`; no userinfo, port or `m.`; the whole line must match), else a username (`@` allowed, lowercased), else rejected. Comments, CSV rows and JSON are rejected. Rejected lines are skipped and counted, and the first five are shown in the log. Duplicates are dropped. Only the shortcode is used; the list shows the link rebuilt from it.
+- Usernames are only added to the saved list (Add All Users / Add Selected). Ones already saved show "(already listed)".
+- Links download one after another in one run (`_run_links`): one `RunLock`, one loader, one `keep_awake`. A link that fails for a known reason is logged and the rest go on; a rate limit or Stop ends the run. "Also add each link's account" works as on the From Link tab. The "newest N posts" setting doesn't apply to a single post.
 - Rows stay after an action; results go to the log and status line.
 
-### 8.4 Image preview
+### 8.5 Image preview
 
 The right side shows the image downloaded most recently in this session (Pillow, since tkinter can't show JPEG).
 
@@ -389,11 +389,11 @@ The right side shows the image downloaded most recently in this session (Pillow,
 - The caption is `@account · post date · shortcode`, plus `image 2 of 3` for carousels.
 - Only images downloaded since the window opened are shown. Until the first one arrives, the panel says "No image yet"; earlier downloads on disk are never loaded.
 - The panel has a fixed starting size (18 text lines square, scaling with the screen) and refits when the window is resized.
-- Show preview hides or shows the column. While hidden, nothing is loaded; turning it back on shows the newest image saved meanwhile. It's on at every start and isn't saved.
-- Open image opens the file in the system viewer, only if it's an image file that exists.
+- Show Preview hides or shows the column. While hidden, nothing is loaded; turning it back on shows the newest image saved meanwhile. It's on at every start and isn't saved.
+- Open Image opens the file in the system viewer, only if it's an image file that exists.
 - A broken file gives no preview. Pillow refuses "decompression bomb" images on its own.
 
-### 8.5 Threading
+### 8.6 Threading
 
 Downloads run on a worker thread that never touches widgets: tkinter isn't thread-safe. The worker posts tuples to `App.messages`, which `_poll_messages()` drains on the Tk thread every 100 ms:
 
@@ -409,7 +409,7 @@ Downloads run on a worker thread that never touches widgets: tkinter isn't threa
 
 Tk variables are read into plain values before the worker starts. The worker may read `threading.Event`s (`stop_requested`, `preview_on`).
 
-### 8.6 Stop and close
+### 8.7 Stop and close
 
 Stop is checked before each post (the current post finishes first) and every half second during a rate-limit pause. Closing during a download asks first.
 
@@ -468,7 +468,7 @@ Usernames, captions, error text and anything else from Instagram are untrusted.
 - Every username goes through `security.is_valid_username()` (letters, digits, `.` and `_`, up to 30) before it's used in a request or a path. That rules out `../` tricks. The list stores names lowercase (`normalize_username`, which also accepts `@name`). Saved folder names pass the same check.
 - Text that's printed, logged or shown goes through `strip_control()`, which removes C0/C1 control characters (except tab and newline, so no ANSI escapes) and Unicode bidi overrides and isolates.
 - Post links are reduced to their shortcode; nothing else from the pasted text reaches a request or a file name.
-- `subprocess` is only called with argument lists, never `shell=True`. "Open folder" and "Open image" check the path is a folder or an image file first (`os.startfile` on a program would run it).
+- `subprocess` is only called with argument lists, never `shell=True`. "Open Folder" and "Open Image" check the path is a folder or an image file first (`os.startfile` on a program would run it).
 
 ## 12. Testing, CI and releases
 
@@ -487,7 +487,13 @@ Usernames, captions, error text and anything else from Instagram are untrusted.
 
 CI (`.github/workflows/tests.yml`) runs Ruff and the whole suite on every pull request and every push to `main`, on Windows, Linux (under `xvfb`) and macOS with Python 3.10 and 3.14. A newer push cancels the run still going for it. Ruff (configured in `pyproject.toml`: its default rules plus bugbear) is pinned in CI; there's no formatter.
 
-Releases (`.github/workflows/release.yml`) start from a pushed `v*.*.*` tag. The tag must match the `pyproject.toml` version, and the same Ruff + test matrix must pass. Then the workflow publishes a GitHub Release with generated notes and `InstaKeep-<version>.zip`, made by `git archive`. `.gitattributes` leaves developer files (`.github/`, `CLAUDE.md`, `memory/`, `docs/make_screenshots.py`) out of the zip. The zip is the whole install: users unzip it and run `python instakeep.py`, and the first start builds `.venv` as usual (§3).
+To release a new version:
+
+1. Set it in `pyproject.toml`, `src/igdl/__init__.py` and `src/instakeep/__init__.py`.
+2. Commit to `main`.
+3. Push a tag: `git tag v0.2.0 && git push origin v0.2.0`.
+
+Releases (`.github/workflows/release.yml`) start from that pushed `v*.*.*` tag. The tag must match the `pyproject.toml` version, and the same Ruff + test matrix must pass. Then the workflow publishes a GitHub Release with generated notes and `InstaKeep-<version>.zip`, made by `git archive`. `.gitattributes` leaves developer files (`.github/`, `CLAUDE.md`, `memory/`, `docs/make_screenshots.py`) out of the zip. The zip is the whole install: users unzip it and run `python instakeep.py`, and the first start builds `.venv` as usual (§3).
 
 ## 13. Design decisions
 
@@ -510,7 +516,7 @@ From the design review in November 2026.
 | Estimate full passes per post, incremental runs from new posts only. | Mixing both kinds of run in one average gives nonsense. |
 | Keep the computer awake and the screen on during downloads only. | Locked laptops on battery entered standby mid-download; an idle window shouldn't block sleep. |
 | Add Pillow for the preview. | tkinter can't show JPEG. |
-| "Show preview" is on at every start and not saved. | It only changes the view; nothing else depends on it. |
+| "Show Preview" is on at every start and not saved. | It only changes the view; nothing else depends on it. |
 
 ## 14. Known limitations
 
