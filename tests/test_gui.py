@@ -144,7 +144,7 @@ def test_download_selected_without_selection_shows_hint(app, dialogs):
 
 
 def test_tabs_are_batch_individual_and_files(app):
-    assert [app.tabs.tab(t, "text") for t in app.tabs.tabs()] == ["From user", "From link", "From file"]
+    assert [app.tabs.tab(t, "text") for t in app.tabs.tabs()] == ["From User", "From Link", "From File"]
 
 
 FILE_TEXT = (
